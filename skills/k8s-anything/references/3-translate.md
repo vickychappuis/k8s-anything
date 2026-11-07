@@ -24,12 +24,27 @@ use (`secret.example.yaml` if there are no secrets, whichever of `httproute.yaml
 The scaffold is the target shape. Tool output is raw material: copy what's right into
 it, don't keep kompose's structure.
 
+## Several app services
+
+- Scaffold once with the **project** name (it names the namespace, part-of label and
+  shared ServiceAccount). Then rename the scaffolded workload to `<project>-<svc>`:
+  Deployment, Service, selectors and image (`<project>-<svc>`). Do the same for the
+  prod HPA, PDB, route and NetworkPolicy. Rename the files to `<svc>-*.yaml`.
+- Use one image per binary or entrypoint, even when one Dockerfile builds them all with
+  a build arg (`stacks/go.md`). List each image in both overlays' `images:`.
+  Write `deploy/k8s/images.txt` with one line per image,
+  `<image> [docker build args]`. `k8sa-smoke` reads it, and it tells CI how to build.
+- A one-off subcommand of an app binary (`api migrate`) reuses that image in a Job
+  with `args`. It doesn't need an image of its own.
+- Give each service only the config it reads: use a ConfigMap per service, and share a
+  Secret only if the services read the same key (e.g. `DATABASE_URL`).
+
 ## Compose → Kustomize mapping
 
 | Compose | Kubernetes |
 |---|---|
 | service with `build:` / app image | workload in `base/` (copy the scaffold's Deployment for each extra app service) |
-| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` — start from `assets/kustomize/dev-services/` (Redis is there and tested); others: single-replica StatefulSet + Service running as the image's own non-root UID. Prod: external service via config |
+| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` — start from `assets/kustomize/dev-services/` (Redis and Postgres are there and tested); others: single-replica StatefulSet + Service running as the image's own non-root UID. Prod: external service via config |
 | `environment:` (non-secret) | `configMapGenerator` literals in base |
 | `environment:` (secret) | `secretRef` in the Deployment + `secretGenerator` with fake values in `overlays/dev`; prod Secret created out-of-band (document in report) |
 | env keys the code never reads | drop them; list in report |
@@ -56,3 +71,14 @@ kompose noise: `io.kompose.*` labels/annotations, `status: {}`,
 | singleton scheduler (Celery beat, Sidekiq-cron leader) | Deployment, `replicas: 1`, `strategy: Recreate` |
 | scheduled task | CronJob (`concurrencyPolicy: Forbid` unless safe to overlap) |
 | migrations / one-off | Job (or initContainer if it must gate rollout — say which and why) |
+
+Compose often runs migrations in `command:` before the server starts
+(`sh -c "app migrate && exec app"`). Don't copy that pattern: every replica would
+migrate at once, and distroless images have no `sh`. Use a Job instead. Job pod
+templates are immutable, so set `ttlSecondsAfterFinished` (or a GitOps hook) so the
+next release can re-create the Job, and document that in the report. kube-linter flags
+Jobs for `no-readiness-probe`. Annotate the Job with
+`ignore-check.kube-linter.io/no-readiness-probe: "run-to-completion Job, no traffic"`.
+A migration usually starts before the database is ready, and in dev the in-cluster DB
+also has to pull and initialize. Set a generous `backoffLimit`: 6 ran out before
+Postgres was ready on a cold kind node. Use `activeDeadlineSeconds` as the real bound.

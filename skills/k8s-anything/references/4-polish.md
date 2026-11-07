@@ -12,8 +12,11 @@ every deviation.
 - `livenessProbe` must be dependency-free. Default is a TCP check on the port; use an
   HTTP path only if that endpoint never touches a dependency.
 - `timeoutSeconds: 3` (the 1s default flaps under load).
-- Workers with no port: no HTTP probes. An `exec` probe only if there's a meaningful
-  check; otherwise none, noted in the report.
+- Workers with no port: no Service, no HTTP probes, no preStop. Add an `exec` probe
+  only if there's a meaningful check; distroless images have no shell. Otherwise
+  leave probes out. Annotate the Deployment with
+  `ignore-check.kube-linter.io/no-readiness-probe` and `.../no-liveness-probe`, give
+  the reason, and note it in the report.
 
 ## Resources
 
@@ -49,6 +52,9 @@ every deviation.
 - Graceful shutdown: native `preStop.sleep` (5s) so endpoints drain;
   `terminationGracePeriodSeconds` > preStop + the app's drain time.
 - Singletons (schedulers, beat): `replicas: 1`, `strategy: Recreate`, no HPA, no PDB.
+- Queue/DB-polling workers: a CPU HPA rarely fits, because backlog doesn't raise CPU.
+  Set a fixed `replicas` in prod (≥ 2 if concurrent consumers are safe) plus a PDB.
+  Suggest KEDA on queue depth as an option.
 
 ## Networking
 

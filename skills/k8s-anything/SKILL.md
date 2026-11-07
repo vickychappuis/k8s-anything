@@ -39,6 +39,7 @@ deploy/k8s/base/                 # app workloads, shared by all environments
 deploy/k8s/overlays/dev/         # + dev-only backing services, dev secretGenerator
 deploy/k8s/overlays/prod/        # + PDB, HPA, NetworkPolicy, route
 deploy/k8s/K8S_REPORT.md         # from assets/report-template.md
+deploy/k8s/images.txt            # only if there are several app images: how to build each
 ```
 
 Helm requested → `deploy/helm/<app>/` instead, same report.
@@ -66,6 +67,14 @@ tell the user: what was generated, what was assumed, what they must answer befor
 Multi-service apps: one `app-analyst` subagent per service in parallel for Discover,
 one `k8s-hardener` per workload for Polish, then one `k8s-validator` over everything.
 Single service: do it inline — subagents cost more than they save.
+
+Parallel hardeners must not share files. Before Polish, split the manifests so each
+workload has its own (`base/<svc>-deployment.yaml`, `overlays/prod/<svc>-prod.yaml`,
+`<svc>-pdb.yaml`). Give each hardener its file list and its service profile. You
+alone edit the `kustomization.yaml` files: hardeners report the lines to add. Dev-only
+backing services built from `assets/kustomize/dev-services/` don't need a hardener.
+If the subagent types aren't registered, give general-purpose agents the matching
+`agents/*.md` file and tell them where the skill lives.
 
 ## Hard rules
 
