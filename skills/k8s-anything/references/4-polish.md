@@ -70,3 +70,11 @@ every deviation.
 
 - Base references the image by bare name; overlays set name/tag via `images:`.
 - Prod: a release tag, ideally pinned by `digest:`. Never `latest`.
+
+## Parallel hardeners
+
+Before Polish, split the manifests so each workload has its own files
+(`base/<svc>-deployment.yaml`, `overlays/prod/<svc>-prod.yaml`, `<svc>-pdb.yaml`).
+Give each hardener its file list and its service profile. Only the main agent edits
+the `kustomization.yaml` files: hardeners report the lines to add. Dev-only backing
+services from `assets/kustomize/dev-services/` don't need a hardener.

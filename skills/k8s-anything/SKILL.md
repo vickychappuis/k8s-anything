@@ -68,13 +68,9 @@ Multi-service apps: one `app-analyst` subagent per service in parallel for Disco
 one `k8s-hardener` per workload for Polish, then one `k8s-validator` over everything.
 Single service: do it inline — subagents cost more than they save.
 
-Parallel hardeners must not share files. Before Polish, split the manifests so each
-workload has its own (`base/<svc>-deployment.yaml`, `overlays/prod/<svc>-prod.yaml`,
-`<svc>-pdb.yaml`). Give each hardener its file list and its service profile. You
-alone edit the `kustomization.yaml` files: hardeners report the lines to add. Dev-only
-backing services built from `assets/kustomize/dev-services/` don't need a hardener.
-If the subagent types aren't registered, give general-purpose agents the matching
-`agents/*.md` file and tell them where the skill lives.
+Parallel hardeners must not share files: see "Parallel hardeners" in
+`references/4-polish.md`. If the subagent types aren't registered, give
+general-purpose agents the matching `agents/*.md` file and the skill's path.
 
 ## Hard rules
 
