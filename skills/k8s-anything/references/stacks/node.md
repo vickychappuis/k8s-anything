@@ -29,9 +29,13 @@ workspaces): build context is the repo root; use `turbo prune --docker` or `pnpm
     --omit=dev && rm -rf .next/cache`; runtime copies `package.json`,
     `next.config.*`, `node_modules`, `public/`, `.next`; `CMD ["node",
     "node_modules/next/dist/bin/next", "start", "-H", "0.0.0.0"]` (not `npm start`:
-    npm in the signal path). `next start` reads `PORT` and ignores `HOSTNAME`.
+    npm in the signal path). `next start` reads `PORT` and ignores `HOSTNAME`;
+    without `-H` it listens on all interfaces (`::`), so drop `-H 0.0.0.0` on
+    IPv6-only clusters.
 - `readOnlyRootFilesystem` → `emptyDir` at `/app/.next/cache` (ISR / image
-  optimization) in both modes.
+  optimization) in both modes; without it every `/_next/image` request logs an
+  `unhandledRejection ... ENOENT mkdir '/app/.next/cache'` and nothing is cached,
+  while probes stay green.
 - `NEXT_PUBLIC_*` are inlined by `next build` into client **and** server bundles →
   a setting on the pod does nothing. In the build stage: `ARG NEXT_PUBLIC_X` +
   `ENV NEXT_PUBLIC_X=${NEXT_PUBLIC_X}` before `npm run build`; one image per
