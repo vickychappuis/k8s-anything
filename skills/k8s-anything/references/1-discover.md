@@ -13,6 +13,20 @@ and container ports, Procfile processes, `.env*` keys, existing Helm/Kustomize/k
 manifests, and whether `deploy/` already exists. It reads files, not behavior — a
 starting point, not the answer.
 
+`services` lists deployable-unit candidates, one entry per: `apps/*`, `packages/*` or
+`services/*` directory with its own manifest (`sources: ["workspace"]`), Go
+`cmd/<name>/` binary (`go-cmd`), compose service with a `build:` context (`compose`;
+merged with the workspace entry when the context matches), Procfile process
+(`procfile`), or — if none of those — the root app (`root`). Each entry has `name`,
+`path`, `kind` (`web`/`worker`/`unknown`, a guess), `stack`, `frameworks`,
+`dockerfile`, `ports` (`[{port, evidence: "file:line"}]`, from `EXPOSE`, compose
+`ports`/`expose`, `--port`/`--bind`/`-p` flags in compose commands, Procfile lines and
+`package.json` scripts, and Go listen addresses) and `evidence`. Use it to
+seed the service table below and to split work across `app-analyst` subagents; confirm
+every `kind` and port in the code. `packages/*` entries are often libraries, not
+services — drop those that are only imported by others. Top-level keys stay
+repo-wide aggregates.
+
 If `existing_k8s_manifests`, `existing_kustomizations`, `existing_helm_charts` or
 `existing_deploy_dir` is non-empty, ask whether to polish those (polish mode) or
 generate fresh output.
