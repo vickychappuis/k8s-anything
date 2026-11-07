@@ -17,7 +17,46 @@
     "requirements\\.txt\\s+gunicorn",
     "CMD\\s*\\[[^\\]]*migrate"
   ],
-  "secret_or_dropped_keys": ["SECRET_KEY", "DATABASE_URL", "REDIS_URL"],
-  "dev_only_images": ["redis", "postgres"],
-  "report_mentions": ["Procfile", "beat", "Recreate", "celerybeat-schedule", "DEBUG", "ALLOWED_HOSTS", "migrate"]
+  "secret_or_dropped_keys": [
+    "SECRET_KEY",
+    "DATABASE_URL",
+    "REDIS_URL"
+  ],
+  "dev_only_images": [
+    "redis",
+    "postgres"
+  ],
+  "report_mentions": [
+    "Procfile",
+    "beat",
+    "Recreate",
+    "celerybeat-schedule",
+    "DEBUG",
+    "ALLOWED_HOSTS",
+    "migrate"
+  ],
+  "services": [
+    {
+      "name": "web",
+      "workload": "django-celery",
+      "kind": "web",
+      "health_path": "/healthz",
+      "port": 8000
+    },
+    {
+      "name": "worker",
+      "workload": "django-celery-worker",
+      "kind": "worker"
+    },
+    {
+      "name": "beat",
+      "workload": "django-celery-beat",
+      "kind": "singleton"
+    },
+    {
+      "name": "migrate",
+      "workload": "django-celery-migrate",
+      "kind": "job"
+    }
+  ]
 }

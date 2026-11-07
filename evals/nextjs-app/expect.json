@@ -18,7 +18,22 @@
     "COPY.*\\.next/standalone",
     "CMD.*server\\.js"
   ],
-  "secret_or_dropped_keys": ["API_SECRET", "NEXT_PUBLIC_API_BASE_URL"],
+  "secret_or_dropped_keys": [
+    "API_SECRET",
+    "NEXT_PUBLIC_API_BASE_URL"
+  ],
   "dev_only_images": [],
-  "report_mentions": ["standalone", "NEXT_PUBLIC_API_BASE_URL", "API_SECRET", ".next/cache"]
+  "report_mentions": [
+    "standalone",
+    "NEXT_PUBLIC_API_BASE_URL",
+    "API_SECRET",
+    ".next/cache"
+  ],
+  "build_args_keys": [
+    "NEXT_PUBLIC_*"
+  ],
+  "required_emptydir_paths": [
+    "/tmp",
+    "/app/.next/cache"
+  ]
 }

@@ -15,7 +15,39 @@
     "\"sh\"\\s*,\\s*\"-c\"",
     "go\\s+run"
   ],
-  "secret_or_dropped_keys": ["DATABASE_URL", "POSTGRES_PASSWORD", "LOG_LEVEL"],
-  "dev_only_images": ["postgres"],
-  "report_mentions": ["DATABASE_URL", "LOG_LEVEL", "depends_on", "9090", "migrate", "worker"]
+  "secret_or_dropped_keys": [
+    "DATABASE_URL",
+    "POSTGRES_PASSWORD",
+    "LOG_LEVEL"
+  ],
+  "dev_only_images": [
+    "postgres"
+  ],
+  "report_mentions": [
+    "DATABASE_URL",
+    "LOG_LEVEL",
+    "depends_on",
+    "9090",
+    "migrate",
+    "worker"
+  ],
+  "services": [
+    {
+      "name": "api",
+      "workload": "go-multiservice-api",
+      "kind": "web",
+      "health_path": "/healthz",
+      "port": 8080
+    },
+    {
+      "name": "worker",
+      "workload": "go-multiservice-worker",
+      "kind": "worker"
+    },
+    {
+      "name": "migrate",
+      "workload": "go-multiservice-migrate",
+      "kind": "job"
+    }
+  ]
 }
