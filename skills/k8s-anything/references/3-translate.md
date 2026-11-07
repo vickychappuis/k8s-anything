@@ -29,7 +29,7 @@ it, don't keep kompose's structure.
 | Compose | Kubernetes |
 |---|---|
 | service with `build:` / app image | workload in `base/` (copy the scaffold's Deployment for each extra app service) |
-| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` — start from `assets/kustomize/dev-services/` (Redis is there and tested); others: single-replica StatefulSet + Service running as the image's own non-root UID. Prod: external service via config |
+| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` — start from `assets/kustomize/dev-services/`: `redis`, `postgres`, `mysql`, `rabbitmq`, `mongodb` (each tested on kind under Pod Security `restricted`; its header has the `secretGenerator` and app URL to wire in). Others: single-replica StatefulSet + Service running as the image's own non-root UID, read-only root with emptyDir for every path it writes. Prod: external service via config |
 | `environment:` (non-secret) | `configMapGenerator` literals in base |
 | `environment:` (secret) | `secretRef` in the Deployment + `secretGenerator` with fake values in `overlays/dev`; prod Secret created out-of-band (document in report) |
 | env keys the code never reads | drop them; list in report |

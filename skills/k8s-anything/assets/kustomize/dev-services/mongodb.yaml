@@ -1,0 +1,141 @@
+# Dev-only MongoDB, standalone (StatefulSet + PVC). Never in base or prod: prod uses a
+# managed MongoDB (e.g. Atlas) and points the app at it via config.
+#
+# Wire it in: copy to overlays/dev/mongodb.yaml and add to overlays/dev/kustomization.yaml:
+#   resources:
+#     - mongodb.yaml
+#   secretGenerator:            # obviously fake dev values only
+#     - name: mongodb-credentials
+#       literals:
+#         - MONGO_INITDB_ROOT_USERNAME=app
+#         - MONGO_INITDB_ROOT_PASSWORD=dev-not-a-secret
+# App env (put the URL in the app's dev secretGenerator, not in base; the root user
+# lives in the admin database, hence authSource=admin):
+#   MONGODB_URI=mongodb://app:dev-not-a-secret@mongodb:27017/app?authSource=admin
+#
+# Runs as the official image's mongodb user (999) under Pod Security "restricted" with a
+# read-only root filesystem. The WiredTiger cache is capped to fit the memory limit.
+# Verified with:
+#   docker run --read-only --tmpfs /tmp:uid=999,gid=999 \
+#     --tmpfs /data/configdb:uid=999,gid=999 -v mongodata:/data/db \
+#     --user 999:999 --cap-drop ALL --security-opt no-new-privileges \
+#     -e MONGO_INITDB_ROOT_USERNAME=app -e MONGO_INITDB_ROOT_PASSWORD=dev-not-a-secret \
+#     mongo:8.0.34
+# and on kind in a namespace labelled pod-security.kubernetes.io/enforce=restricted:
+#   kubectl exec mongodb-0 -- sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --quiet --eval "db.adminCommand({ping: 1})"'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mongodb
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mongodb
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  labels:
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: database
+spec:
+  serviceName: mongodb
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongodb
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongodb
+        app.kubernetes.io/component: database
+    spec:
+      serviceAccountName: mongodb
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mongodb
+          # Pin a patch release; match the major version the app used before.
+          image: mongo:8.0.34
+          args: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
+          envFrom:
+            - secretRef:
+                name: mongodb-credentials
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          # ping needs no auth. It targets the pod IP, not localhost: during first-boot
+          # init the entrypoint runs a temporary mongod bound to 127.0.0.1 only, so this
+          # stays not-ready until the real one is up. HOME=/tmp keeps mongosh's per-run
+          # logs off the data volume.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "HOME=/tmp mongosh --host \"$(hostname -i)\" --quiet --norc --eval 'db.adminCommand({ping: 1}).ok' | grep -qx 1"]
+            # mongosh is a Node.js app: several seconds per run on a busy node.
+            periodSeconds: 20
+            timeoutSeconds: 20
+          # First boot runs the image's init (temporary server, not on the pod IP),
+          # which can take minutes on a slow node: allow up to 5 min before liveness.
+          startupProbe:
+            tcpSocket:
+              port: mongodb
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            tcpSocket:
+              port: mongodb
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: configdb
+              mountPath: /data/configdb
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: configdb
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
