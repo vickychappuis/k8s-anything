@@ -1,0 +1,67 @@
+# Procfile:3 `beat: celery -A mysite beat`. SINGLETON: two beats would enqueue every
+# periodic task twice. replicas: 1 + Recreate (a rolling update would briefly run two),
+# and never an HPA or PDB.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-celery-beat
+  labels:
+    app.kubernetes.io/name: django-celery-beat
+    app.kubernetes.io/component: scheduler
+  annotations:
+    ignore-check.kube-linter.io/no-rolling-update-strategy: "singleton scheduler: a rolling update would run two beats and duplicate tasks"
+    ignore-check.kube-linter.io/no-readiness-probe: "scheduler: no port, no Service; readiness gates nothing (4-polish.md)"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: django-celery-beat
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: django-celery-beat
+        app.kubernetes.io/component: scheduler
+    spec:
+      serviceAccountName: django-celery
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: beat
+          image: django-celery
+          # Celery's default schedule file is ./celerybeat-schedule (/app, read-only:
+          # verified to exit 1). Write it to the /tmp emptyDir instead. The file only
+          # holds last-run times; losing it on restart is harmless for this schedule.
+          command: ["celery", "-A", "mysite", "beat", "--loglevel=info",
+                    "--schedule", "/tmp/celerybeat-schedule"]
+          envFrom:
+            - configMapRef:
+                name: django-celery-config
+            - secretRef:
+                name: django-celery-secrets
+          resources:
+            requests:
+              cpu: 20m
+              memory: 128Mi   # assumption
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

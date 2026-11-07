@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: django-celery-dev
+resources:
+  - namespace.yaml
+  - ../../base
+  # Dev-only backing services (from k8s-anything assets/kustomize/dev-services/).
+  # Never in base or prod. Postgres rather than the sqlite fallback
+  # (mysite/settings.py:15): sqlite would live in each pod's own filesystem, so web,
+  # worker and the migrate Job would each see a different database.
+  - postgres.yaml
+  - redis.yaml
+images:
+  - name: django-celery
+    newTag: dev
+configMapGenerator:
+  - name: django-celery-config
+    behavior: merge
+    literals:
+      - WEB_CONCURRENCY=1
+# Dev secrets: obviously fake values only. Prod creates the Secret out-of-band.
+secretGenerator:
+  - name: django-celery-secrets
+    literals:
+      - SECRET_KEY=dev-not-a-secret
+      - DATABASE_URL=postgres://app:dev-not-a-secret@postgres:5432/app
+      - REDIS_URL=redis://redis:6379/0
+  - name: postgres-dev
+    literals:
+      - POSTGRES_PASSWORD=dev-not-a-secret

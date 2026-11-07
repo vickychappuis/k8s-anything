@@ -1,0 +1,25 @@
+# Workers: fixed count (no HPA: CPU is a poor signal for queue depth; use KEDA on
+# the Redis queue length if autoscaling is needed). Spread across nodes and zones.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-celery-worker
+spec:
+  replicas: 2
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: django-celery-worker
+          matchLabelKeys: ["pod-template-hash"]
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: django-celery-worker
+          matchLabelKeys: ["pod-template-hash"]

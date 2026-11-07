@@ -1,0 +1,23 @@
+{
+  "source": "examples/django-celery",
+  "prompt": "Turn this app into a Kubernetes deployment with dev and prod overlays.",
+  "health_path": "/healthz",
+  "unchanged_files": [
+    "Procfile",
+    "requirements.txt",
+    "manage.py",
+    "mysite/__init__.py",
+    "mysite/celery.py",
+    "mysite/settings.py",
+    "mysite/urls.py",
+    "mysite/wsgi.py"
+  ],
+  "forbidden_cmd_patterns": [
+    "runserver",
+    "requirements\\.txt\\s+gunicorn",
+    "CMD\\s*\\[[^\\]]*migrate"
+  ],
+  "secret_or_dropped_keys": ["SECRET_KEY", "DATABASE_URL", "REDIS_URL"],
+  "dev_only_images": ["redis", "postgres"],
+  "report_mentions": ["Procfile", "beat", "Recreate", "celerybeat-schedule", "DEBUG", "ALLOWED_HOSTS", "migrate"]
+}
