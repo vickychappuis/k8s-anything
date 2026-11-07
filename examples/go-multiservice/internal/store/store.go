@@ -4,13 +4,25 @@ package store
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
 // Open returns a lazily-connecting pool: no connection is made until first use.
+// The pool is bounded so that replicas x MaxOpenConns stays well under Postgres'
+// max_connections (100 by default), and connections are recycled so a database
+// failover or a rotated password is picked up.
 func Open(dsn string) (*sql.DB, error) {
-	return sql.Open("pgx", dsn)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	return db, nil
 }
 
 // Migrate creates the schema. Idempotent.
