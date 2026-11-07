@@ -20,7 +20,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib-kind.sh disable=SC1091
 . "$HERE/lib-kind.sh"
 
-K6_IMAGE="${K8SA_K6_IMAGE:-grafana/k6:0.54.0}"
+K6_IMAGE="${K8SA_K6_IMAGE:-grafana/k6:1.8.2}"
 NS="" APP="" OVERLAY="" DEPLOY="" SVC="" URL_PATH="/" VUS=10 RPS=0 DURATION=30
 MAX_ERR="0.01" REQ_TIMEOUT=5 NAME="k8sa-load-$$-$RANDOM"
 while [ $# -gt 0 ]; do
@@ -154,7 +154,7 @@ spec:
         - {name: tmp, emptyDir: {}}
 EOF
 
-echo "== load: $VUS VUs (rps cap: ${RPS:-0}, 0 = none) for ${DURATION}s -> $TARGET (job $NS/$NAME, $K6_IMAGE)"
+echo "== load: $([ "$RPS" -gt 0 ] && echo "$RPS req/s fixed rate, up to $((VUS * 5)) VUs" || echo "$VUS VUs, as fast as possible") for ${DURATION}s -> $TARGET (job $NS/$NAME, $K6_IMAGE)"
 deadline=$(( $(date +%s) + DURATION + 180 ))
 status=""
 while [ "$(date +%s)" -lt "$deadline" ]; do

@@ -17,7 +17,7 @@
 | kube-linter | 5 | best-practice lint | `brew install kube-linter` | automatic in `k8sa-validate` | — |
 | trivy | 2, 5 | config + image scan | `brew install trivy` | `K8SA_TRIVY_DOCKER=1` | skip, note in report |
 | kind | 5 | local cluster smoke test | `brew install kind` | — | skip, note in report |
-| k6 | 5 | `k8sa-load` / `k8sa-chaos` | not needed locally | `grafana/k6:0.54.0` runs as a Job in kind (`K8SA_K6_IMAGE` overrides) | skip, note in report |
+| k6 | 5 | `k8sa-load` / `k8sa-chaos` | not needed locally | `grafana/k6:1.8.2` runs as a Job in kind (`K8SA_K6_IMAGE` overrides) | skip, note in report |
 
 Don't install tools without the user's OK. Prefer the Docker fallback when Docker is
 running.
