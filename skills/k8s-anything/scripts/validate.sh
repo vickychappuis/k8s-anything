@@ -101,25 +101,32 @@ check() { # check <label> <rendered-file-or-yaml-dir>
 }
 
 validate_chart() { # validate_chart <chart-dir>: render once per values-*.yaml, check each
-  local c="$1" cname v env label out rc vfiles=()
+  local c="$1" cname v env label out rc n vfiles vargs
   cname="$(awk '$1 == "name:" {gsub(/["\047]/, "", $2); print $2; exit}' "$c/Chart.yaml")"
   [ -n "$cname" ] || cname="$(basename "$c")"
-  # Each values-<env>.yaml is layered on values.yaml, like an overlay on a base.
+  # The chart defaults alone ("-": what a bare `helm install` gets), then each
+  # values-<env>.yaml layered on values.yaml, like an overlay on a base.
+  vfiles=("-")
   for v in "$c"/values-*.yaml "$c"/values-*.yml; do [ -f "$v" ] && vfiles+=("$(basename "$v")"); done
-  [ ${#vfiles[@]} -gt 0 ] || vfiles=("values.yaml")
   for v in "${vfiles[@]}"; do
-    env="${v#values-}"; env="${env%.y*ml}"
-    label="helm $cname ($v)"
+    if [ "$v" = "-" ]; then env="defaults"; label="helm $cname (values.yaml)"; vargs=()
+    else env="${v#values-}"; env="${env%.y*ml}"; label="helm $cname ($v)"; vargs=(-f "@CHART@/$v"); fi
     mkdir -p "$TMP/$cname-$env"; out="$TMP/$cname-$env/rendered.yaml"
-    helm_run "$c" template "$cname" @CHART@ -f "@CHART@/$v" --namespace "$cname" \
+    # ${vargs[@]+...}: bash 3.2 treats an empty array as unset under `set -u`.
+    helm_run "$c" template "$cname" @CHART@ ${vargs[@]+"${vargs[@]}"} --namespace "$cname" \
       --kube-version "$K8S_VERSION" > "$out" 2> "$TMP/helm.err"; rc=$?
+    n="$(grep -c '^kind:' "$out")"
+    if [ $rc -eq 0 ] && [ "$n" -eq 0 ]; then
+      echo "  rendered no resources" > "$TMP/helm.err"; rc=1
+    fi
     case $rc in
       0)
-        echo "rendered $label -> $(grep -c '^kind:' "$out") resources"
+        echo "rendered $label -> $n resources"
         check "$label" "$out"
         echo "-- helm lint --strict"
-        helm_run "$c" lint @CHART@ -f "@CHART@/$v" --strict --quiet; rc=$?
-        ran=$((ran+1)); [ $rc -eq 0 ] || fail=1
+        helm_run "$c" lint @CHART@ ${vargs[@]+"${vargs[@]}"} --strict --quiet \
+          --kube-version "$K8S_VERSION"; rc=$?
+        case $rc in 0) ran=$((ran+1));; 127) skip "helm lint: no binary and no docker";; *) ran=$((ran+1)); fail=1;; esac
         ;;
       127) hdr "$label"; skip "helm: no binary and no docker, chart not rendered" ;;
       *) hdr "$label"; sed 's/^/  /' "$TMP/helm.err"; echo "  [FAIL] helm template failed"; fail=1 ;;
