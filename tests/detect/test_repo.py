@@ -2,7 +2,7 @@
 import json
 import os
 
-from .support import DetectCase
+from .support import DetectCase, write_tree
 
 TOP_LEVEL_KEYS = [
     "path", "stacks", "frameworks", "dockerfiles", "expose_ports", "compose_files",
@@ -156,3 +156,23 @@ class Cli(DetectCase):
         self.assertEqual(web["stack"], "python")
         self.assertEqual(self.ports(web), ["5000"])
         self.assertEqual([s["name"] for s in out["services"]], ["web"])
+
+
+class SymlinkEscapeTest(DetectCase):
+    def test_symlink_outside_repo_is_not_read(self):
+        outside = os.path.join(self.tmp, "outside")
+        os.makedirs(outside)
+        write_tree(outside, {"secrets.env": "LEAKED_SECRET_NAME=x\n"})
+        root = os.path.join(self.tmp, "app")
+        write_tree(root, {".env": "INSIDE_KEY=1\n", "requirements.txt": "flask\n"})
+        os.symlink(os.path.join(outside, "secrets.env"), os.path.join(root, ".env.local"))
+        out = self.detect(sub="app")
+        dumped = json.dumps(out)
+        self.assertNotIn("LEAKED_SECRET_NAME", dumped)
+        self.assertIn("INSIDE_KEY", out["env_keys"])
+
+    def test_symlink_inside_repo_still_read(self):
+        root = os.path.join(self.tmp, "app")
+        write_tree(root, {"config/real.env": "INSIDE_LINKED=1\n"})
+        os.symlink(os.path.join("config", "real.env"), os.path.join(root, ".env"))
+        self.assertIn("INSIDE_LINKED", self.detect(sub="app")["env_keys"])

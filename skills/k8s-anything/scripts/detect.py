@@ -81,6 +81,10 @@ def walk(root):
 def read(root, rel):
     p = os.path.join(root, rel)
     try:
+        # Never read through a symlink that leaves the repo (e.g. .env -> ~/secrets).
+        real_root = os.path.realpath(root)
+        if os.path.commonpath([real_root, os.path.realpath(p)]) != real_root:
+            return ""
         if not os.path.isfile(p) or os.path.getsize(p) > MAX_FILE:  # FIFOs, sockets, huge files
             return ""
         with open(p, encoding="utf-8-sig", errors="replace") as fh:
