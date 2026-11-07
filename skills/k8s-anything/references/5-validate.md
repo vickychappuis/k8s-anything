@@ -70,6 +70,73 @@ myapp-worker  --build-arg MAIN=./cmd/worker
 - Build args are split on whitespace with no quoting; `#` starts a comment; `|` is not
   allowed. Use `-f path/Dockerfile` for another Dockerfile.
 
+### Load and chaos (after a smoke run, same cluster)
+
+```bash
+k8sa-load  <app-path> [overlay] [--path /healthz] [--vus 10] [--rps N] [--duration 30] [--max-error-rate 0.01]
+k8sa-chaos <app-path> prod [--path /healthz] [--kills 5] [--interval 10] [--mode delete|evict|rollout] [--rps 200]
+k8sa-chaos --self-test     # once per cluster: can chaos see a missing readinessProbe here?
+```
+
+`k8sa-load` runs a pinned `grafana/k6` Job inside the smoke namespace against the app's
+Service and prints requests, error rate, rps and p50/p95/p99 latency. A request fails on
+a network error, timeout or status outside 200–399; failures are split into `timeout`,
+`conn` (refused/reset — the usual restart bug) and `http` (bad status). `k8sa-chaos`
+runs fixed-rate load (200 rps — availability, not capacity) while it disrupts the Deployment — `delete` random ready pods, `evict` them through the Eviction
+API (honours the PDB), or `rollout` restart (exercises `maxUnavailable: 0`) — waiting
+for the Deployment to be fully ready before each one. Zero failed requests (default
+threshold 0) means no request was dropped across those disruptions — see below for how
+much that proves. Both only use `--context kind-k8s-anything` and `smoke-*`
+namespaces; pass `-n <namespace>` instead of the app path to target one directly.
+
+| Exit | Meaning |
+|---|---|
+| 0 | PASS — error rate within threshold (chaos: every disruption happened under load) |
+| 1 | FAIL — too many failed requests; `K8SA_FAIL` lines carry timestamps to match against the disruptions |
+| 2 | usage/setup error (no smoke namespace, several Deployments without `--deployment`…) |
+| 3 | INCONCLUSIVE — no result, or not every disruption happened under load; never a pass |
+
+Chaos needs ≥ 2 ready replicas for `delete`/`evict` (use the prod overlay). With
+placeholder Secrets the app's real endpoints may 500 — point `--path` at the health
+endpoint and say so in the report. Only `timeout` failures on a busy shared node are
+noise: re-run `k8sa-load --rps 200` alone as a baseline before blaming the manifests.
+Paste the result lines into the report.
+
+**What a chaos PASS does and doesn't prove.** On single-node kind it reliably catches
+too few replicas, a bad `maxUnavailable`/PDB, and pods that are routed to long before
+they listen. It is weak evidence for the readiness probe and `preStop` of a fast-booting
+app. flask-redis (`evals/flask-redis/reference`), `--path /healthz`, `delete` mode:
+
+| Template | Load | Failed requests |
+|---|---|---|
+| reference (probes + preStop) | 200 rps, 10 kills | 0 / 54001 |
+| no readiness/startup probe | 200 rps, 5 kills | 0 / 31001 |
+| no preStop | 200 rps, 10 kills | 8 / 54000 (all within 50 ms after one kill) |
+| no preStop | 50 rps, 10 kills | 2 / 13500 |
+| neither | 50 rps, 3 kills | **0** (PASS) |
+| neither | 200 rps, 5 kills | 7 / 31001 |
+| reference + `sleep 10` before gunicorn | 50 rps, 3 kills | 0 / 5451 |
+| no probes + `sleep 10` before gunicorn | 50 rps, 3 kills | 852 / 5451 (FAIL) |
+
+Why the missing probe is invisible: gunicorn's master binds the port before its worker
+boots (~0.3 s), so a pod routed to early queues requests in the listen backlog instead
+of refusing them. Why the missing preStop is only sometimes visible: the gap it covers
+(old pod has closed its socket, kube-proxy hasn't synced — `minSyncPeriod` 1 s) is a
+fraction of a second on one node; in ~1 of 10 kills a few requests land in it
+(`connection reset`/`refused`). So a FAIL is real, but a PASS on a fast-booting app is
+weak evidence for the probe and preStop; more `--kills` and `--rps` make it stronger.
+
+So before trusting a PASS, run `k8sa-chaos --self-test` once per cluster: it deploys a
+busybox fixture that takes 8 s to listen into a throwaway `smoke-k8sa-selftest-*`
+namespace and requires chaos to PASS it with a readinessProbe + preStop (0 / 4200
+failed on kind) and FAIL it without (535 / 4201 refused). Exit 0 = the harness can see a
+readiness gap here; 1 = it can't, and no chaos verdict on this cluster means anything.
+To test *your* app's readiness gating, make it slow to start in the smoke namespace
+only — e.g. `kubectl --context kind-k8s-anything -n smoke-… patch deploy <app>` its
+`command` to `sh -c 'sleep 10; exec <original CMD>'` — and re-run chaos: it must still
+PASS (re-run `k8sa-smoke` afterwards to restore the real template). Report a PASS as "no dropped requests under N × mode at R rps on kind", never as
+"zero-downtime proven".
+
 ## Loop
 
 Repeat Polish ↔ Validate until clean. Paste final summaries into the report.

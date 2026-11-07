@@ -18,6 +18,8 @@ Never hand-write what a tool already generates — generate, then edit.
 | `k8sa-scaffold [--helm] <dest> <name> <port> [health] [registry]` | hardened Kustomize base + dev/prod overlays (`--helm`: chart in `<dest>/<name>/`) |
 | `k8sa-validate <dir>` | kustomize build or `helm template` per values file + kubeconform + kube-linter + trivy |
 | `k8sa-smoke <app> [overlay]` | build, load and roll out on a local kind cluster |
+| `k8sa-load <app> [overlay]` | in-cluster k6 load test of the smoke deployment: requests, error rate, p50/p95 |
+| `k8sa-chaos <app> [overlay]` | load while killing/evicting/restarting pods; fails if any request drops |
 
 In Claude Code they're on `PATH` while the plugin is enabled. Anywhere else, run
 `<this skill's directory>/scripts/<name>.sh` (`smoke` → `smoke-kind.sh`). Other paths
