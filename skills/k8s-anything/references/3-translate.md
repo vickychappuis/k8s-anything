@@ -32,8 +32,8 @@ it, don't keep kompose's structure.
   prod HPA, PDB, route and NetworkPolicy. Rename the files to `<svc>-*.yaml`.
 - Use one image per binary or entrypoint, even when one Dockerfile builds them all with
   a build arg (`stacks/go.md`). List each image in both overlays' `images:`.
-  Write `deploy/k8s/images.txt` with one line per image,
-  `<image> [docker build args]`. `k8sa-smoke` reads it, and it tells CI how to build.
+  Write `deploy/k8s/images.txt` (format in `5-validate.md`): `k8sa-smoke` builds
+  from it, and it tells CI how to build each image.
 - A one-off subcommand of an app binary (`api migrate`) reuses that image in a Job
   with `args`. It doesn't need an image of its own.
 - Give each service only the config it reads: use a ConfigMap per service, and share a
@@ -79,6 +79,8 @@ templates are immutable, so set `ttlSecondsAfterFinished` (or a GitOps hook) so 
 next release can re-create the Job, and document that in the report. kube-linter flags
 Jobs for `no-readiness-probe`. Annotate the Job with
 `ignore-check.kube-linter.io/no-readiness-probe: "run-to-completion Job, no traffic"`.
-A migration usually starts before the database is ready, and in dev the in-cluster DB
-also has to pull and initialize. Set a generous `backoffLimit`: 6 ran out before
-Postgres was ready on a cold kind node. Use `activeDeadlineSeconds` as the real bound.
+Keep `backoffLimit` small (≈4) with `activeDeadlineSeconds` as the bound, so a broken
+migration fails fast. In dev the in-cluster DB is created in the same apply and may
+still be pulling or running initdb: patch the Job in `overlays/dev` with an
+initContainer that waits for it, using the DB's own image (`pg_isready` in a loop for
+Postgres). Don't raise `backoffLimit` to cover a slow start.

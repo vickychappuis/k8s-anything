@@ -36,7 +36,7 @@ api binary (cmd/api/main.go:33).
 ## Evidence
 | decision | value | source |
 |---|---|---|
-| stack | Go 1.23, pgx v5 via database/sql | go.mod:3,5; internal/store/store.go:8,13 |
+| stack | Go 1.23, pgx v5 via database/sql | go.mod:3,5; internal/store/store.go:9,17 |
 | deployable binaries | api, worker | cmd/api/main.go, cmd/worker/main.go (stacks/go.md: `cmd/*/main.go`) |
 | api port | 8080 (PORT set explicitly) | cmd/api/main.go:43-46 reads `PORT`, default 8080; compose hard-codes 9090 (docker-compose.yml:11,13) |
 | bind address | all interfaces | cmd/api/main.go:76 (`":"+port`) |
@@ -59,6 +59,9 @@ api binary (cmd/api/main.go:33).
 - Worker prod replicas fixed at 2 (no CPU HPA: backlog doesn't raise CPU, cmd/worker/main.go:63-64).
 - Migrations run as a Job, not an initContainer: neither the api nor the worker fails before the schema exists (verified).
 - `ttlSecondsAfterFinished: 300` on the Job, so the next release can re-create it.
+- Job `backoffLimit: 4` (fails in ~2.5 min if the migration is broken). In dev only, an
+  initContainer (`postgres:16.6`, `pg_isready` loop) waits for the in-cluster Postgres
+  (overlays/dev/migrate-wait-for-postgres.yaml); `activeDeadlineSeconds: 600` bounds both.
 - Postgres 16.6 (compose said `postgres:16`), pinned to a patch release.
 - Prod reaches Postgres outside the namespace; no egress NetworkPolicy (per 4-polish.md).
 
@@ -90,7 +93,7 @@ inline password `s3cret-pw` (docker-compose.yml:14,23,33) is not reused anywhere
 
 ## Not translated
 - `command: ["sh", "-c", "/app migrate && exec /app"]` (docker-compose.yml:9): replaced by the migrate Job; distroless has no `sh`, and every replica would migrate concurrently.
-- `depends_on` (docker-compose.yml:15-16, 26-28): no equivalent needed — both binaries open the DB lazily and retry (verified). No initContainer.
+- `depends_on` (docker-compose.yml:15-16, 26-28): no equivalent needed — both binaries open the DB lazily and retry (verified). No initContainer on api or worker; only the dev migrate Job waits for Postgres.
 - `LOG_LEVEL: debug` (docker-compose.yml:25): declared, never read by any Go file. Dropped.
 - Host port binding `9090:9090` and `PORT: "9090"`: the pod uses 8080 consistently (PORT env, containerPort, probes).
 - `build.args.MAIN` (docker-compose.yml:4-7, 19-21): carried over as `--build-arg MAIN=…` per image (`deploy/k8s/images.txt`).
@@ -156,13 +159,16 @@ Status: **PASS** (`k8sa-validate` exit 0, "PASS (6 checks ran)", `K8SA_TRIVY_DOC
 - Ignored checks: worker `no-readiness-probe`, `no-liveness-probe` (no port; distroless has no shell for exec);
   migrate Job `no-readiness-probe` (run-to-completion, no traffic).
 - hadolint on Dockerfile: clean.
-- Smoke test (kind, `k8sa-smoke . dev`, both images from `deploy/k8s/images.txt`): **PASS** on the
-  second run. api and worker rolled out, postgres ready, migrate Job Complete (3 restarts while
-  Postgres started). Namespace enforced PSS `restricted`. End-to-end via port-forward:
-  `POST /jobs` → `{"id":1}`, then `GET /jobs` → `{"done":1,"pending":0}` (the worker processed it).
-  First run: **FAIL**. The Postgres image pull took 2m33s, so the 180s rollout wait timed out,
-  and the migrate Job hit `BackoffLimitExceeded` (backoffLimit 6). Fix: `backoffLimit: 12`, with
-  `activeDeadlineSeconds: 600` as the real bound.
+- Smoke test (kind, `k8sa-smoke . dev`, both images from `deploy/k8s/images.txt`): **PASS**.
+  migrate Job Complete with 0 restarts (its dev initContainer waited for Postgres), api and
+  worker rolled out, postgres ready. Namespace enforced PSS `restricted`. End-to-end via
+  port-forward: `POST /jobs` → `{"id":1}`, then `GET /jobs` → `{"done":1,"pending":0}` (the
+  worker processed it). An earlier run without the initContainer needed `backoffLimit: 12` to
+  survive a cold Postgres pull; replaced by the dev-only wait so prod keeps `backoffLimit: 4`.
+- Smoke test prod overlay: **not meaningful**. `go-multiservice-db` is created out-of-band in
+  prod, so the smoke test makes a placeholder Secret with no keys (`envFrom` names no keys):
+  api and worker exit with `DATABASE_URL is required` and the rollout times out. The migrate
+  Job's failure is reported as a warning (it reads a placeholder Secret).
 - Image vulnerability scan (`trivy image`): not run.
 
 ## Deploy

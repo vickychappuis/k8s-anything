@@ -1,0 +1,28 @@
+# Dev only: the in-cluster Postgres (postgres.yaml) is created in the same apply and
+# may still be pulling or running initdb. Wait for it instead of burning the Job's
+# backoffLimit. Prod points at a managed Postgres that is already up, so a failing
+# migration there fails fast. Same image as postgres.yaml: already on the node.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: go-multiservice-migrate
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16.6
+          # Bounded by the Job's activeDeadlineSeconds. -U is required: UID 10001 has no
+          # passwd entry, and without it pg_isready exits 3 ("no attempt") forever.
+          command: ["sh", "-c", "until pg_isready -q -h postgres -p 5432 -U app; do sleep 2; done"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -6,6 +6,8 @@ resources:
   - ../../base
   # Dev-only backing service, from docker-compose.yml:29-36. Never in base or prod.
   - postgres.yaml
+patches:
+  - path: migrate-wait-for-postgres.yaml
 # One image per binary (Dockerfile, --build-arg MAIN=./cmd/<name>).
 images:
   - name: go-multiservice-api

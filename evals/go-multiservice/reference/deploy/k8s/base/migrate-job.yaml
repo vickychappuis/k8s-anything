@@ -28,9 +28,10 @@ metadata:
   annotations:
     ignore-check.kube-linter.io/no-readiness-probe: "run-to-completion Job: receives no traffic, readiness is meaningless"
 spec:
-  # Retries while the database comes up (pod backoff caps at 6 min). 6 was too few in the
-  # kind smoke test: a cold Postgres pull + initdb outlasted it. The deadline is the bound.
-  backoffLimit: 12
+  # The database is expected to be up (managed in prod; dev waits for its in-cluster
+  # Postgres in an initContainer, overlays/dev/migrate-wait-for-postgres.yaml), so a
+  # failure is real: give up after a few retries (~2.5 min of backoff), not 10 minutes.
+  backoffLimit: 4
   activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 300
   template:
