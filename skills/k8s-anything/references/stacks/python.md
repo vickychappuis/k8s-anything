@@ -10,6 +10,8 @@ Frameworks: `django`, `flask`, `fastapi`, `starlette`, `celery`, `streamlit`.
 --host 0.0.0.0`. gunicorn binds `0.0.0.0:$PORT` when `PORT` is set and reads
 `WEB_CONCURRENCY` for workers — size it to the CPU request, not host cores. This also
 fixes apps that hard-code `127.0.0.1` in their `__main__` block, without a source change.
+On SIGTERM gunicorn waits up to `--graceful-timeout` (30s) for requests, so
+`terminationGracePeriodSeconds` ≥ preStop + 30, or lower the timeout.
 If the server isn't in the requirements, the template adds it at build time; note it.
 
 **Build:** `uv.lock` → `uv sync --frozen --no-dev`; poetry → `poetry install --only
@@ -35,16 +37,17 @@ main`. Native deps (psycopg, numpy) → `-slim`, not alpine.
   prefork defaults to the **node's** core count, not the container's.
 - Warm shutdown on SIGTERM finishes running tasks, so set
   `terminationGracePeriodSeconds` to the longest task.
+- No liveness probe by default: `celery inspect ping` boots the whole app on every
+  probe and fails while the broker is down, restarting every worker at once. Bound
+  hung tasks with `--time-limit` (or `task_time_limit`) instead; propose a value.
 - Beat = Deployment with `replicas: 1` and `strategy: Recreate` (a rolling update
   would run two schedulers). No HPA and no PDB.
 - Beat's default schedule file is `./celerybeat-schedule` in the working directory,
   which fails on a read-only root FS ("Read-only file system", exit 1). Run it with
   `--schedule /tmp/celerybeat-schedule` on the `/tmp` emptyDir.
-- Neither has a port. Skip HTTP probes and annotate kube-linter's
-  `no-readiness-probe` (and `no-rolling-update-strategy` on beat) with the reason
-  (5-validate.md).
-- Pin `kombu` and `redis` too if `requirements.txt` doesn't. `celery[redis]` leaves
-  them floating, and a new kombu can need a redis-py the lock doesn't allow
-  (`VersionMismatch` at startup). This is a source change, so propose it.
+- Neither has a port: no HTTP probes, kube-linter annotations as in 4-polish.md.
+- Pin `kombu` and `redis` if they float. Example: `celery==5.4.0` allows kombu 5.7,
+  which requires redis-py ≥ 6.1 at runtime, while `celery[redis]` 5.4 caps redis
+  below 6 (`VersionMismatch` at startup). This is a source change, so propose it.
 
 **Resources:** `100m / 192Mi`, limit `512Mi` (gunicorn with 2 workers).
