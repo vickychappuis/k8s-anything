@@ -1,6 +1,6 @@
 """Unit tests for evals/check.py. Stdlib only.
 
-Run: python3 -m unittest discover -s tests/evals -v
+Run: python3 -m unittest discover -s tests -v
 Most tests feed synthetic objects straight into the check functions; the end-to-end
 test at the bottom needs `kubectl` (for `kubectl kustomize`) and is skipped without it.
 """
@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("check", os.path.join(REPO, "evals", "check.py"))
@@ -93,33 +93,83 @@ class Base(unittest.TestCase):
         self.assertEqual(set(got), {status}, "%r: %s" % (needle, ck.results))
 
 
-# ------------------------------------------------------------------------- YAML
-class YAMLTest(Base):
-    def test_kustomize_style(self):
-        text = (
-            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n"
-            "spec:\n  template:\n    spec:\n      containers:\n      - name: app\n"
-            "        args:\n        - --x\n        env:\n        - name: A\n"
-            "          value: \"5000\"\n      volumes:\n      - emptyDir: {}\n"
-            "        name: tmp\n---\nkind: ConfigMap\ndata:\n  a: |\n    l1\n\n    l2\n"
-            "  b: 'it''s'\n  c: [x, \"y\"]\n  d: 3\n  e: true\n  f: ~\n")
-        docs = check.parse_yaml_docs(text)
-        self.assertEqual(len(docs), 2)
-        c = docs[0]["spec"]["template"]["spec"]["containers"][0]
-        self.assertEqual(c["args"], ["--x"])
-        self.assertEqual(c["env"], [{"name": "A", "value": "5000"}])
-        self.assertEqual(docs[0]["spec"]["template"]["spec"]["volumes"], [{"emptyDir": {}, "name": "tmp"}])
-        self.assertEqual(docs[1]["data"], {"a": "l1\n\nl2\n", "b": "it's", "c": ["x", "y"],
-                                           "d": 3, "e": True, "f": None})
+# ---------------------------------------------------------------------- rendering
+def have_kubectl():
+    try:
+        return subprocess.run(["kubectl", "version", "--client"], stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0
+    except OSError:
+        return False
 
-    def test_indented_sequences_and_comments(self):
-        text = "a:\n  - x: 1  # c\n    y: \"a # b\"\n  - - n\n# top\nb: plain: colon\n"
-        self.assertEqual(check.parse_yaml(text),
-                         {"a": [{"x": 1, "y": "a # b"}, ["n"]], "b": "plain: colon"})
 
-    def test_bad_indentation_raises(self):
-        with self.assertRaises(check.YAMLError):
-            check.parse_yaml("a:\n    b: 1\n  c: 2\n")
+# Real `kubectl kustomize` output shapes that a hand-written YAML subset parser got
+# wrong or crashed on: block indentation indicators (|2-), |+ chomping, single-quoted
+# and double-quoted scalars wrapped over lines, explicit '? ' keys for long keys,
+# '---' inside block scalars, quoted keys.
+TRICKY_YAML = """apiVersion: v1
+data:
+  dq: "\\tword0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11
+    word12 SECRET_KEY word14"
+  keep: |+
+    end
+
+
+  lead: |2-
+      two leading spaces
+    none
+  literal: |
+    a
+    ---
+    b: c
+  sq: 'a: word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11
+    word12 it''s'
+  ? xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  : longkey
+  "yes": "no"
+kind: ConfigMap
+metadata:
+  name: tricky
+---
+apiVersion: v1
+kind: List
+items:
+- apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: n
+"""
+
+
+class RenderTest(Base):
+    def test_decode_json_stream(self):
+        self.assertEqual(check.decode_json_stream(' {"a": 1}\n{"b": [2]}\n\n'),
+                         [{"a": 1}, {"b": [2]}])
+        self.assertEqual(check.decode_json_stream(""), [])
+        with self.assertRaises(ValueError):
+            check.decode_json_stream('{"a": 1} {')
+
+    def test_empty_render_is_no_objects(self):
+        self.assertEqual(check.to_objects("  \n"), [])
+
+    @unittest.skipUnless(have_kubectl(), "kubectl not installed")
+    def test_tricky_yaml_decoded_exactly(self):
+        objs = check.to_objects(TRICKY_YAML)
+        self.assertEqual([check.kind_of(o) for o in objs], ["ConfigMap", "Namespace"])
+        data = objs[0]["data"]
+        self.assertEqual(data["dq"], "\tword0 word1 word2 word3 word4 word5 word6 word7 word8 "
+                                     "word9 word10 word11 word12 SECRET_KEY word14")
+        self.assertEqual(data["keep"], "end\n\n\n")
+        self.assertEqual(data["lead"], "  two leading spaces\nnone")
+        self.assertEqual(data["literal"], "a\n---\nb: c\n")
+        self.assertTrue(data["sq"].endswith("word12 it's"))
+        self.assertEqual(data["x" * 131], "longkey")
+        self.assertEqual(data["yes"], "no")
+        self.assertNotIn("annotations", objs[0]["metadata"], "no-op annotate must leave no trace")
+
+    @unittest.skipUnless(have_kubectl(), "kubectl not installed")
+    def test_undecodable_yaml_raises(self):
+        with self.assertRaises(check.RenderError):
+            check.to_objects("a: [unclosed\n")
 
 
 # ------------------------------------------------------------------- Dockerfiles
@@ -152,6 +202,16 @@ class DockerfileTest(Base):
         self.assertStatus(ck, "non-root USER", "fail")
         self.assertStatus(ck, ":latest", "fail")
         self.assertStatus(ck, ".dockerignore", "fail")
+
+    def test_untagged_base_is_latest(self):
+        self.write("Dockerfile", "FROM python AS build\nFROM build\nUSER 1000\n")
+        self.assertStatus(self.run_df({}), ":latest", "fail")
+        self.write("Dockerfile", "FROM --platform=$BUILDPLATFORM golang:1.23 AS b\n"
+                                 "FROM localhost:5000/team/base:1.2\nFROM b\nFROM scratch\n"
+                                 "FROM alpine@sha256:abc\nFROM ${BASE}\nUSER 1000\n")
+        self.assertStatus(self.run_df({}), ":latest", "pass")
+        self.write("Dockerfile", "FROM localhost:5000/team/base\nUSER 1000\n")
+        self.assertStatus(self.run_df({}), ":latest", "fail")
 
     def test_multiple_dockerfiles(self):
         self.write("cmd/api/Dockerfile", "FROM golang:1.23\nUSER 65532\n")
@@ -258,6 +318,12 @@ class ServicesTest(Base):
         ck = run_overlay(self.EXP, objs)
         self.assertStatus(ck, "worker worker: no Service", "fail")
         self.assertStatus(ck, "worker worker: no HTTP probes", "fail")
+
+    def test_worker_with_tcp_or_grpc_probe(self):
+        for probe in ({"tcpSocket": {"port": 8080}}, {"grpc": {"port": 9090}}):
+            objs = self.mutate("worker", lambda o: o["spec"]["template"]["spec"]["containers"][0]
+                               .update({"livenessProbe": probe}))
+            self.assertStatus(run_overlay(self.EXP, objs), "worker worker: no HTTP probes", "fail")
 
     def test_singleton_with_hpa_fails(self):
         objs = self.good_objs() + [hpa("beat", "beat")]
@@ -372,6 +438,52 @@ class OverlayTest(Base):
         self.assertStatus(ck, "emptyDir at /tmp", "fail")
 
 
+    def test_required_emptydir_respects_service_overlays(self):
+        exp = {"services": [{"name": "web", "kind": "web", "overlays": ["prod"]}],
+               "required_emptydir_paths": ["/tmp"]}
+        ck = run_overlay(exp, [NS], ov="dev")
+        self.assertEqual(statuses(ck, "emptyDir"), [])
+        self.assertStatus(run_overlay(exp, [NS], ov="prod"), "web emptyDir at /tmp", "fail")
+
+    def test_empty_overlay_is_still_checked(self):
+        ck = check.run_checks({"source": "x", "services": [{"name": "web"}]}, "/nonexistent",
+                              validate=False, renderer=lambda path: ([], ""))
+        self.assertEqual(ck.status("overlay prod builds"), "pass")
+        self.assertEqual(ck.status("prod: has Namespace"), "fail")
+        self.assertEqual(ck.status("prod: web web is a Deployment/StatefulSet"), "fail")
+        self.assertFalse(ck.summary()["ok"])
+
+
+class SchemaTest(Base):
+    def test_valid(self):
+        with open(os.path.join(REPO, "evals", "flask-redis", "expect.json")) as f:
+            self.assertEqual(check.schema_errors(json.load(f)), [])
+        self.assertEqual(check.schema_errors({"source": "x", "_comment": "ok", "services": [
+            {"name": "w", "kind": "worker", "overlays": ["prod"]}],
+            "required_emptydir_paths": {"w": ["/tmp"]}, "weights": {"report": 2}}), [])
+
+    def test_typos_and_bad_types_are_errors(self):
+        bad = {"secret_keys": ["X"], "overlays": "prod", "weights": {"reprot": 1},
+               "forbidden_cmd_patterns": ["("],
+               "services": [{"name": "a", "knd": "worker"}, {"kind": "web"},
+                            {"name": "a", "kind": "daemon"}]}
+        errs = "\n".join(check.schema_errors(bad))
+        for needle in ("'source'", "unknown key 'secret_keys'", "'overlays' must be",
+                       "'weights'", "bad regex", "unknown field 'knd'", "services[1] needs",
+                       "kind must be one of", "unique"):
+            self.assertIn(needle, errs)
+
+    def test_main_rejects_invalid_expect(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with open(os.path.join(d, "expect.json"), "w") as f:
+            json.dump({"source": "examples/x", "secret_keys": ["SECRET_KEY"]}, f)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(check.main([d, d]), 2)
+        self.assertIn("secret_keys", err.getvalue())
+
+
 class ReportTest(Base):
     def test_report(self):
         d = tempfile.mkdtemp()
@@ -407,14 +519,6 @@ class ScoreTest(Base):
         ck = check.Checker({"report": 10})
         ck.check("r", True, category="report")
         self.assertEqual(ck.results[0]["weight"], 10)
-
-
-def have_kubectl():
-    try:
-        return subprocess.run(["kubectl", "version", "--client"], stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode == 0
-    except OSError:
-        return False
 
 
 @unittest.skipUnless(have_kubectl(), "kubectl not installed")
@@ -472,6 +576,55 @@ class EndToEndTest(Base):
         ck = check.run_checks({"services": []}, self.app, validate=False)
         self.assertEqual(ck.status("overlay dev builds"), "fail")
         self.assertEqual(ck.status("overlay prod builds"), "pass")
+
+
+
+@unittest.skipUnless(have_kubectl(), "kubectl not installed")
+class NegativeFixturesTest(Base):
+    """A bad run, rendered by real kubectl: every planted defect must FAIL its check."""
+
+    def test_bad_manifests_fail(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        web = deployment("web", replicas=3, ports=HTTP_PORT, image="acme/web:latest",
+                         env=[{"name": "SECRET_KEY", "value": "hunter2"}])  # no readiness
+        worker = deployment("worker", probes={"readinessProbe": {"tcpSocket": {"port": 8080}}})
+        beat = deployment("beat", replicas=2)  # RollingUpdate by default
+        cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "cfg"},
+              "data": {"settings.env": "DEBUG=0\nSECRET_KEY=hunter2\n"}}
+        res = [dict(o, apiVersion="apps/v1") for o in (web, worker, beat)] + [
+            cm, dict(service("web", {"app.kubernetes.io/name": "web"}, "http"), apiVersion="v1"),
+            dict(hpa("web", "web"), apiVersion="autoscaling/v2"),
+            dict(hpa("beat", "beat"), apiVersion="autoscaling/v2"),
+            {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "bad"}}]
+        files = {"Dockerfile": "FROM python\nUSER 10001\nCMD flask run\n",
+                 ".dockerignore": "x\n",
+                 "deploy/k8s/overlays/prod/res.yaml": "\n---\n".join(json.dumps(o) for o in res),
+                 "deploy/k8s/overlays/prod/kustomization.yaml": "resources:\n- res.yaml\n"}
+        for rel, text in files.items():
+            p = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+        exp = {"source": "examples/none", "overlays": ["prod"], "health_path": "/healthz",
+               "forbidden_cmd_patterns": [r"flask\s+run"], "secret_or_dropped_keys": ["SECRET_KEY"],
+               "services": [{"name": "web", "kind": "web"}, {"name": "worker", "kind": "worker"},
+                            {"name": "beat", "kind": "singleton"}]}
+        self.assertEqual(check.schema_errors(exp), [])
+        ck = check.run_checks(exp, root, validate=False)
+        self.assertEqual(ck.status("overlay prod builds"), "pass")
+        for name in ("Dockerfile: no :latest base images",
+                     "doesn't run dev server (flask\\s+run)",
+                     "prod: web web: readiness on /healthz",
+                     "prod: worker worker: no HTTP probes",
+                     "prod: singleton beat: replicas 1",
+                     "prod: singleton beat: strategy Recreate",
+                     "prod: singleton beat: not targeted by an HPA",
+                     "prod: HPA web owns replicas (no replicas field on Deployment/web)",
+                     "prod: SECRET_KEY not in any ConfigMap",
+                     "prod: has PodDisruptionBudget"):
+            self.assertEqual(ck.status(name), "fail", name)
+        self.assertFalse(ck.summary()["ok"])
 
 
 if __name__ == "__main__":

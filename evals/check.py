@@ -10,9 +10,10 @@ Checks properties, not an exact diff: agent output is not deterministic, but a g
 run must satisfy every expectation. Exit 0 if no check fails, 1 otherwise (2 on a
 usage error). Skipped checks (--no-validate) are reported as SKIP, never as PASS.
 
-Stdlib only. Needs `kubectl` for `kubectl kustomize`; the rendered YAML (kustomize's
-normalized block style) is parsed by the small parser below, so checks work on
-structure, not on regexes over text. Runs bin/k8sa-validate from this repo.
+Stdlib only. Needs `kubectl` (offline): `kubectl kustomize` renders each overlay and
+`kubectl annotate --local -o json` turns the YAML into JSON with kubectl's own
+decoder, so checks work on structure, not on regexes over text and not on a
+hand-written YAML parser. Runs bin/k8sa-validate from this repo.
 """
 import argparse
 import json
@@ -20,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VALIDATE = os.path.join(REPO, "bin", "k8sa-validate")
@@ -34,6 +36,8 @@ EXPECTED_KINDS = {
     "cronjob": ("CronJob",),
 }
 LONG_RUNNING = ("web", "worker", "singleton")
+# A worker serves no port, so a probe that connects to one is wrong (exec is fine).
+NETWORK_PROBES = ("httpGet", "tcpSocket", "grpc")
 
 # Default weight per check category; expect.json "weights" overrides any of them.
 DEFAULT_WEIGHTS = {
@@ -49,257 +53,67 @@ DEFAULT_WEIGHTS = {
 REPORT_SECTIONS = ("Evidence", "Assumptions", "Open questions", "Checklist", "Validation")
 
 
-# --------------------------------------------------------------------------- YAML
-class YAMLError(ValueError):
-    pass
+# ---------------------------------------------------------------------- rendering
+# kubectl has no "kustomize -o json". `kubectl annotate --local -o json` decodes the
+# rendered YAML with kubectl's own (sigs.k8s.io/yaml) decoder and prints JSON, offline:
+# --local never contacts a server, and an empty KUBECONFIG makes sure of it. Removing
+# an annotation key nobody uses is the no-op edit it needs; it leaves an empty
+# metadata.annotations, which to_objects() drops again.
+NOOP_ANNOTATION = "k8sa.invalid/eval-noop-"
 
 
-def _strip_comment(s):
-    """Drop a trailing ' # comment' that is outside quotes."""
-    quote = None
-    for i, c in enumerate(s):
-        if quote:
-            if c == quote:
-                quote = None
-        elif c in "\"'":
-            quote = c
-        elif c == "#" and (i == 0 or s[i - 1] in " \t"):
-            return s[:i].rstrip()
-    return s
+def decode_json_stream(text):
+    """Concatenated JSON values (kubectl prints one per object) -> list."""
+    dec, out, i = json.JSONDecoder(), [], 0
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return out
+        obj, i = dec.raw_decode(text, i)
+        out.append(obj)
 
 
-def _scalar(s):
-    s = _strip_comment(s.strip())
-    if s.startswith("!") and " " in s:  # tags such as !!str, !!binary
-        s = s.split(" ", 1)[1].strip()
-    if not s:
-        return None
-    if s[0] == '"':
-        try:
-            return json.loads(s)
-        except ValueError:
-            return s[1:-1]
-    if s[0] == "'":
-        return s[1:-1].replace("''", "'")
-    if s == "{}":
-        return {}
-    if s == "[]":
+def _flatten(objs):
+    out = []
+    for o in objs:
+        if isinstance(o, dict) and kind_of(o) == "List" and isinstance(o.get("items"), list):
+            out.extend(_flatten(o["items"]))
+        elif isinstance(o, dict):
+            out.append(o)
+    return out
+
+
+def to_objects(yaml_text):
+    """Rendered multi-doc YAML -> list of objects, via kubectl. Raises RenderError."""
+    if not yaml_text.strip():
         return []
-    if s[0] == "[" and s[-1] == "]":
-        return [_scalar(p) for p in _split_flow(s[1:-1])]
-    if s[0] == "{" and s[-1] == "}":
-        out = {}
-        for p in _split_flow(s[1:-1]):
-            k, _, v = p.partition(":")
-            out[_scalar(k)] = _scalar(v)
-        return out
-    if s in ("null", "~", "Null", "NULL"):
-        return None
-    if s in ("true", "True", "TRUE"):
-        return True
-    if s in ("false", "False", "FALSE"):
-        return False
-    if re.match(r"^[-+]?(0|[1-9]\d*)$", s):
-        return int(s)
-    if re.match(r"^[-+]?(\d+\.\d*|\.\d+)([eE][-+]?\d+)?$", s):
-        return float(s)
-    return s
+    fd, kubeconfig = tempfile.mkstemp(prefix="k8sa-eval-kubeconfig-")
+    os.close(fd)
+    env = dict(os.environ, KUBECONFIG=kubeconfig)
+    try:
+        r = subprocess.run(["kubectl", "annotate", "--local", "-f", "-", "-o", "json",
+                            NOOP_ANNOTATION], input=yaml_text, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, universal_newlines=True, env=env)
+    except OSError as e:
+        raise RenderError("kubectl not runnable: %s" % e)
+    finally:
+        os.remove(kubeconfig)
+    if r.returncode != 0:
+        raise RenderError("kubectl could not decode the rendered YAML: %s" % r.stderr.strip())
+    try:
+        objs = _flatten(decode_json_stream(r.stdout))
+    except ValueError as e:
+        raise RenderError("unexpected kubectl output: %s" % e)
+    for o in objs:
+        md = o.get("metadata")
+        if isinstance(md, dict) and md.get("annotations") == {}:
+            del md["annotations"]
+    return objs
 
 
-def _split_flow(s):
-    parts, depth, quote, cur = [], 0, None, ""
-    for c in s:
-        if quote:
-            quote = None if c == quote else quote
-        elif c in "\"'":
-            quote = c
-        elif c in "[{":
-            depth += 1
-        elif c in "]}":
-            depth -= 1
-        elif c == "," and depth == 0:
-            parts.append(cur)
-            cur = ""
-            continue
-        cur += c
-    if cur.strip():
-        parts.append(cur)
-    return parts
-
-
-def _split_key(content):
-    """Return (key, rest) if content is a mapping entry, else None."""
-    if content[0] in "\"'":
-        q = content[0]
-        end = content.find(q, 1)
-        while q == '"' and end > 0 and content[end - 1] == "\\":
-            end = content.find(q, end + 1)
-        if end < 0 or not content[end + 1:].lstrip().startswith(":"):
-            return None
-        key = _scalar(content[:end + 1])
-        rest = content[end + 1:].lstrip()[1:]
-        return str(key), rest.strip()
-    if content[0] in "[{":
-        return None
-    m = re.match(r"^([^#]*?)\s*:(?:\s+(.*))?$", content)
-    if not m or not m.group(1):
-        return None
-    return m.group(1), (m.group(2) or "").strip()
-
-
-class _Parser(object):
-    """Block-style YAML subset: what `kubectl kustomize` emits (maps, sequences at
-    the same or deeper indent, plain/quoted/block scalars, empty flow {} and [],
-    simple flow collections). No anchors or merge keys."""
-
-    def __init__(self, text):
-        self.lines = text.replace("\t", "  ").split("\n")
-        self.i = 0
-
-    def _skip(self):
-        while self.i < len(self.lines):
-            s = self.lines[self.i].strip()
-            if s and not s.startswith("#"):
-                return True
-            self.i += 1
-        return False
-
-    def _cur(self):
-        line = self.lines[self.i]
-        return len(line) - len(line.lstrip(" ")), line.strip()
-
-    def parse(self):
-        if not self._skip():
-            return None
-        ind, content = self._cur()
-        if _split_key(content) is None and not self._is_seq(content):
-            self.i += 1
-            return _scalar(content)
-        node = self._node(ind)
-        if self._skip():
-            raise YAMLError("unexpected content at line %d: %r" % (self.i + 1, self.lines[self.i]))
-        return node
-
-    @staticmethod
-    def _is_seq(content):
-        return content == "-" or content.startswith("- ")
-
-    def _node(self, ind):
-        _, content = self._cur()
-        return self._seq(ind) if self._is_seq(content) else self._map(ind)
-
-    def _seq(self, ind):
-        out = []
-        while self._skip():
-            cind, content = self._cur()
-            if cind != ind or not self._is_seq(content):
-                if cind > ind:
-                    raise YAMLError("bad indentation at line %d" % (self.i + 1))
-                break
-            rest = content[1:].lstrip()
-            if not rest or rest.startswith("#"):
-                self.i += 1
-                out.append(self._child(ind, allow_same=False))
-            elif self._is_seq(rest) or _split_key(rest) is not None:
-                # "- key: v" -> re-read the line as a map (or nested seq) indented
-                # where its first key starts.
-                new_ind = ind + (len(content) - len(rest))
-                self.lines[self.i] = " " * new_ind + rest
-                out.append(self._node(new_ind))
-            else:
-                self.i += 1
-                out.append(self._value(rest, ind))
-        return out
-
-    def _map(self, ind):
-        out = {}
-        while self._skip():
-            cind, content = self._cur()
-            if cind != ind or self._is_seq(content):
-                if cind > ind:
-                    raise YAMLError("bad indentation at line %d" % (self.i + 1))
-                break
-            kv = _split_key(content)
-            if kv is None:
-                raise YAMLError("expected 'key:' at line %d: %r" % (self.i + 1, content))
-            key, rest = kv
-            self.i += 1
-            if not rest or rest.startswith("#"):
-                out[key] = self._child(ind, allow_same=True)
-            else:
-                out[key] = self._value(rest, ind)
-        return out
-
-    def _child(self, ind, allow_same):
-        if not self._skip():
-            return None
-        cind, content = self._cur()
-        if cind > ind or (allow_same and cind == ind and self._is_seq(content)):
-            return self._node(cind)
-        return None
-
-    def _value(self, rest, ind):
-        if rest[0] in "|>":
-            return self._block_scalar(rest, ind)
-        if rest[0] == '"' and not re.search(r'(?<!\\)"\s*(#.*)?$', rest[1:]):
-            return self._multiline_quoted(rest)
-        if rest[0] not in "\"'[{":
-            # plain scalar folded over several more-indented lines
-            while self.i < len(self.lines):
-                line = self.lines[self.i]
-                s = line.strip()
-                lind = len(line) - len(line.lstrip(" "))
-                if not s or lind <= ind or s.startswith("#"):
-                    break
-                rest += " " + s
-                self.i += 1
-        return _scalar(rest)
-
-    def _multiline_quoted(self, first):
-        buf = first
-        while self.i < len(self.lines):
-            s = self.lines[self.i].strip()
-            self.i += 1
-            buf = buf[:-1] if buf.endswith("\\") else buf + " "
-            buf += s
-            if re.search(r'(?<!\\)"\s*$', s):
-                break
-        return _scalar(buf)
-
-    def _block_scalar(self, header, ind):
-        chomp = "-" if "-" in header else ("+" if "+" in header else "")
-        folded = header[0] == ">"
-        raw = []
-        block_ind = None
-        while self.i < len(self.lines):
-            line = self.lines[self.i]
-            if line.strip():
-                lind = len(line) - len(line.lstrip(" "))
-                if lind <= ind:
-                    break
-                if block_ind is None:
-                    block_ind = lind
-                raw.append(line[block_ind:] if lind >= block_ind else line.strip())
-            else:
-                raw.append("")
-            self.i += 1
-        while raw and raw[-1] == "" and chomp != "+":
-            raw.pop()
-        text = (" " if folded else "\n").join(raw)
-        return text if chomp == "-" else text + "\n"
-
-
-def parse_yaml(text):
-    return _Parser(text).parse()
-
-
-def parse_yaml_docs(text):
-    docs = []
-    for chunk in re.split(r"^---[ \t]*(?:#.*)?$", text, flags=re.M):
-        doc = parse_yaml(chunk)
-        if doc is not None:
-            docs.append(doc)
-    return docs
+class RenderError(Exception):
+    pass
 
 
 def render(path):
@@ -312,9 +126,9 @@ def render(path):
     if r.returncode != 0:
         return None, r.stderr.strip()
     try:
-        return [d for d in parse_yaml_docs(r.stdout) if isinstance(d, dict)], ""
-    except YAMLError as e:
-        return None, "could not parse kustomize output: %s" % e
+        return to_objects(r.stdout), ""
+    except RenderError as e:
+        return None, str(e)
 
 
 # ------------------------------------------------------------------ object helpers
@@ -433,6 +247,76 @@ def find_workload(objs, svc):
     return None
 
 
+# ---------------------------------------------------------------- expect.json schema
+STR_LIST_KEYS = ("overlays", "dockerfiles", "forbidden_cmd_patterns", "build_args_keys",
+                 "unchanged_files", "secret_or_dropped_keys", "dev_only_images",
+                 "report_mentions")
+TOP_KEYS = STR_LIST_KEYS + ("source", "prompt", "health_path", "services",
+                            "required_emptydir_paths", "weights")
+SERVICE_KEYS = ("name", "workload", "kind", "health_path", "port", "overlays")
+
+
+def _str_list(v):
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def schema_errors(exp):
+    """A typo in expect.json must not silently drop checks (a false PASS), so unknown
+    keys and wrong types are usage errors. Keys starting with '_' are comments."""
+    if not isinstance(exp, dict):
+        return ["expect.json must be an object"]
+    errs = []
+    for k in exp:
+        if k not in TOP_KEYS and not k.startswith("_"):
+            errs.append("unknown key %r" % k)
+    if not isinstance(exp.get("source"), str) or not exp.get("source"):
+        errs.append("'source' (string) is required")
+    for k in ("prompt", "health_path"):
+        if k in exp and not isinstance(exp[k], str):
+            errs.append("%r must be a string" % k)
+    for k in STR_LIST_KEYS:
+        if k in exp and not _str_list(exp[k]):
+            errs.append("%r must be a list of strings" % k)
+    for pat in exp.get("forbidden_cmd_patterns") or []:
+        try:
+            re.compile(pat)
+        except (re.error, TypeError) as e:
+            errs.append("bad regex %r in forbidden_cmd_patterns: %s" % (pat, e))
+    w = exp.get("weights", {})
+    if not isinstance(w, dict) or any(k not in DEFAULT_WEIGHTS or isinstance(v, bool)
+                                      or not isinstance(v, (int, float)) for k, v in w.items()):
+        errs.append("'weights' must map categories (%s) to numbers" % ", ".join(DEFAULT_WEIGHTS))
+    services = exp.get("services", [])
+    if not isinstance(services, list):
+        errs.append("'services' must be a list")
+        services = []
+    names = []
+    for i, svc in enumerate(services):
+        if not isinstance(svc, dict) or not isinstance(svc.get("name"), str) or not svc["name"]:
+            errs.append("services[%d] needs a 'name' string" % i)
+            continue
+        names.append(svc["name"])
+        for k in svc:
+            if k not in SERVICE_KEYS and not k.startswith("_"):
+                errs.append("services[%d] (%s): unknown field %r" % (i, svc["name"], k))
+        if svc.get("kind", "web") not in KINDS:
+            errs.append("services[%d] (%s): kind must be one of %s"
+                        % (i, svc["name"], ", ".join(KINDS)))
+        if "overlays" in svc and not _str_list(svc["overlays"]):
+            errs.append("services[%d] (%s): 'overlays' must be a list of strings" % (i, svc["name"]))
+    if len(set(names)) != len(names):
+        errs.append("service names must be unique")
+    req = exp.get("required_emptydir_paths")
+    if req is not None:
+        if isinstance(req, dict):
+            for n, paths in req.items():
+                if not _str_list(paths):
+                    errs.append("required_emptydir_paths[%r] must be a list of strings" % n)
+        elif not _str_list(req):
+            errs.append("'required_emptydir_paths' must be a list of strings or a map")
+    return errs
+
+
 # ------------------------------------------------------------------------ checker
 class Checker(object):
     def __init__(self, weights=None):
@@ -478,6 +362,25 @@ def final_stage(df):
     return parts[-1] if len(parts) > 1 else df
 
 
+def latest_bases(df):
+    """FROM images that resolve to :latest, explicitly or by having no tag. Earlier
+    stage names, scratch, digests and ${VAR} images (unknown) are not flagged."""
+    stages, bad = set(), []
+    for line in re.findall(r"^\s*FROM\s+(.+)$", df, re.M | re.I):
+        toks = [t for t in line.split() if not t.startswith("--")]
+        if not toks:
+            continue
+        image = toks[0]
+        if len(toks) >= 3 and toks[1].lower() == "as":
+            stages.add(toks[2].lower())
+        if image.lower() in stages or image == "scratch" or "@" in image or "$" in image:
+            continue
+        last = image.rsplit("/", 1)[-1]
+        if ":" not in last or last.split(":", 1)[1] == "latest":
+            bad.append(image)
+    return bad
+
+
 def check_dockerfiles(ck, exp, app, prod_objs=None):
     paths = exp.get("dockerfiles") or ["Dockerfile"]
     texts = []
@@ -490,9 +393,9 @@ def check_dockerfiles(ck, exp, app, prod_objs=None):
         ck.check("%s runs as numeric non-root USER" % rel,
                  users and re.match(r"^[1-9]\d*(:\d+)?$", users[-1]),
                  "USER=%s" % (users[-1] if users else None), category="security")
-        ck.check("%s: no :latest base images" % rel,
-                 not re.search(r"^\s*FROM\s+(--\S+\s+)*\S+:latest\b", df, re.M | re.I),
-                 category="container")
+        bad = latest_bases(df)
+        ck.check("%s: no :latest base images" % rel, not bad,
+                 "latest or untagged: %s" % ", ".join(bad), category="container")
         d = os.path.dirname(rel)
         ignores = [os.path.join(app, rel + ".dockerignore"), os.path.join(app, d, ".dockerignore"),
                    os.path.join(app, ".dockerignore")]
@@ -580,8 +483,8 @@ def check_service(ck, ov, objs, svc):
         svcs = services_selecting(objs, w)
         ck.check("%s: no Service" % label, not svcs,
                  "selected by %s" % [name_of(s) for s in svcs], category="services")
-        http = [p for p, pr in probes if "httpGet" in pr]
-        ck.check("%s: no HTTP probes" % label, not http, "httpGet in %s" % http,
+        net = ["%s.%s" % (p, h) for p, pr in probes for h in NETWORK_PROBES if h in pr]
+        ck.check("%s: no HTTP probes" % label, not net, "network probes: %s" % net,
                  category="services")
     elif skind == "singleton":
         reps = get(w, "spec", "replicas")
@@ -655,17 +558,20 @@ def check_overlay(ck, exp, ov, objs):
     # Writable paths a read-only root filesystem needs (e.g. /tmp, /app/.next/cache).
     req = exp.get("required_emptydir_paths")
     if req:
+        by_name = dict((s["name"], s) for s in services or [])
         if isinstance(req, dict):
             targets = [(n, paths) for n, paths in req.items()]
         else:
             names = [s["name"] for s in services or [] if s.get("kind", "web") in LONG_RUNNING]
             targets = [(n, req) for n in names] or [(None, req)]
         for sname, paths in targets:
+            svc = by_name.get(sname) or {"name": sname}
+            if ov not in svc.get("overlays", [ov]):
+                continue  # service not expected in this overlay
             if sname is None:
                 ws = [o for o in objs if kind_of(o) in ("Deployment", "StatefulSet")]
             else:
-                kind = next((s.get("kind", "web") for s in services or [] if s["name"] == sname), None)
-                w = find_workload(objs, {"name": sname, "kind": kind})
+                w = find_workload(objs, svc)
                 ws = [w] if w is not None else []
             for p in paths:
                 ok = bool(ws) and all(p in emptydir_mounts(w) for w in ws)
@@ -704,7 +610,7 @@ def run_checks(exp, app, validate=True, renderer=render):
         ck.check("overlay %s builds" % ov, objs is not None,
                  (errors[ov] or "")[:200], category="build")
     for ov, objs in rendered.items():
-        if objs:
+        if objs is not None:  # an overlay that renders nothing still fails its checks
             check_overlay(ck, exp, ov, objs)
 
     if not validate:
@@ -713,7 +619,9 @@ def run_checks(exp, app, validate=True, renderer=render):
         try:
             r = subprocess.run([VALIDATE, k8s], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                universal_newlines=True)
-            ck.check("k8sa-validate PASS (exit 0)", r.returncode == 0, "exit=%d" % r.returncode,
+            detail = "exit=%d%s" % (r.returncode, " (INCONCLUSIVE: no validator ran)"
+                                    if r.returncode == 3 else "")
+            ck.check("k8sa-validate PASS (exit 0)", r.returncode == 0, detail,
                      category="validation")
         except OSError as e:
             ck.check("k8sa-validate PASS (exit 0)", False, str(e), category="validation")
@@ -751,6 +659,10 @@ def main(argv=None):
             exp = json.load(f)
     except (IOError, OSError, ValueError) as e:
         sys.stderr.write("cannot read expect.json: %s\n" % e)
+        return 2
+    errs = schema_errors(exp)
+    if errs:
+        sys.stderr.write("invalid expect.json:\n" + "".join("  - %s\n" % e for e in errs))
         return 2
     if a.print_source:
         print(exp.get("source", ""))
