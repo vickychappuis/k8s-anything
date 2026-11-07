@@ -9,8 +9,12 @@
 #                      evict   - Eviction API on a random pod (honours the PDB)
 #                      rollout - kubectl rollout restart (exercises maxUnavailable/maxSurge)
 #   --max-error-rate R tolerated failure fraction (default: 0 = zero downtime)
-#   --rps N            fixed request rate (default: 50); --vus N pre-allocated VUs (default: 10)
+#   --rps N            fixed request rate (default: 200); --vus N pre-allocated VUs (default: 40)
 #   --deployment D, --service S, --path P, --timeout SECS  as in load.sh
+#   --self-test        no app needed: run chaos against a slow-starting busybox fixture
+#                      with and without a readinessProbe, in a throwaway smoke-* namespace.
+#                      Passes only if the probed one PASSes and the unprobed one FAILs,
+#                      i.e. this cluster + harness can actually see a readiness gap.
 # Exit: 0 no failed requests, 1 requests failed, 2 usage/setup error, 3 INCONCLUSIVE.
 # Only talks to the kind-k8s-anything context, only to smoke-* namespaces.
 set -euo pipefail
@@ -18,10 +22,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib-kind.sh disable=SC1091
 . "$HERE/lib-kind.sh"
 
-NS="" APP="" OVERLAY="" DEPLOY="" SVC="" KILLS=5 INTERVAL=10 MODE=delete MAX_ERR=0
-# Modest fixed-rate load: this measures availability, not capacity. Saturating the app
-# (or a busy shared node) turns into timeouts that have nothing to do with restarts.
-LOAD_ARGS=(--rps 50 --vus 10)
+NS="" APP="" OVERLAY="" DEPLOY="" SVC="" KILLS=5 INTERVAL=10 MODE=delete MAX_ERR=0 SELF_TEST=
+# Fixed-rate load: this measures availability, not capacity. The gaps chaos looks for
+# last well under a second and hit maybe 1 disruption in 10 (old pod gone, kube-proxy
+# not synced yet), so more rps and more --kills both raise the odds of seeing them. Saturating the app (or a busy shared node) turns into timeouts
+# that have nothing to do with restarts: check `load.sh --rps 200` alone first.
+LOAD_ARGS=(--rps 200 --vus 40)
 while [ $# -gt 0 ]; do
   case "$1" in
     -n|--namespace) NS="${2:?}"; shift 2;;
@@ -30,9 +36,10 @@ while [ $# -gt 0 ]; do
     --kills) KILLS="${2:?}"; shift 2;;
     --interval) INTERVAL="${2:?}"; shift 2;;
     --mode) MODE="${2:?}"; shift 2;;
+    --self-test) SELF_TEST=1; shift;;
     --max-error-rate) MAX_ERR="${2:?}"; shift 2;;
     --path|--vus|--rps|--timeout) LOAD_ARGS+=("$1" "${2:?}"); shift 2;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0;;
     -*) die "unknown option: $1";;
     *) if [ -z "$APP" ]; then APP="$1"; elif [ -z "$OVERLAY" ]; then OVERLAY="$1"
        else die "unexpected argument: $1"; fi; shift;;
@@ -42,6 +49,11 @@ for v in "$KILLS" "$INTERVAL"; do
   case "$v" in ''|*[!0-9]*) die "--kills/--interval take whole numbers";; esac
 done
 case "$MODE" in delete|evict|rollout) ;; *) die "--mode must be delete, evict or rollout";; esac
+
+if [ -n "$SELF_TEST" ]; then
+  # shellcheck source=chaos-selftest.sh disable=SC1091
+  . "$HERE/chaos-selftest.sh"   # exits
+fi
 
 resolve_target "$NS" "$APP" "$OVERLAY" "$DEPLOY" "$SVC"
 
@@ -90,6 +102,7 @@ finish() {
   "${K[@]}" -n "$NS" delete job,configmap "$JOB" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 }
 trap finish EXIT
+trap 'exit 3' INT TERM HUP   # interrupted: INCONCLUSIVE, and the EXIT trap cleans up
 
 # Start disrupting only once the load pod is actually sending traffic.
 for _ in $(seq 1 60); do
@@ -150,7 +163,10 @@ elif [ "$rc" -eq 0 ]; then
 elif [ "$rc" -eq 1 ]; then
   echo "ZERO-DOWNTIME FAIL: requests failed during $DONE x $MODE (see K8SA_FAIL lines above for timestamps)"
   echo "Check: preStop sleep, readinessProbe, graceful SIGTERM handling in the app server, PDB, maxUnavailable: 0."
+elif [ "$rc" -eq 3 ]; then
+  echo "INCONCLUSIVE: the load test produced no result"
 else
-  echo "INCONCLUSIVE: load test exited $rc"
+  echo "ERROR: load test exited $rc"
+  [ "$rc" -eq 2 ] || rc=3   # killed or crashed: never a pass, never a verdict
 fi
 exit "$rc"
