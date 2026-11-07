@@ -10,9 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck skills/k8s-anything/scripts/*.sh bin/*
+        run: shellcheck skills/k8s-anything/scripts/*.sh bin/* evals/run_all.sh
       - name: python compiles
         run: python3 -m py_compile skills/k8s-anything/scripts/detect.py evals/check.py
+      - name: unit tests (latest python and 3.9)
+        run: |
+          python3 -m unittest discover -s tests -v
+          docker run --rm -v "$PWD:/w" -w /w python:3.9-slim python -m unittest discover -s tests
       - name: skills have frontmatter
         run: |
           for f in skills/*/SKILL.md agents/*.md; do
@@ -30,24 +34,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: detect emits valid JSON
-        run: bin/k8sa-detect examples/flask-redis | python3 -m json.tool
+        run: |
+          for d in examples/*/; do bin/k8sa-detect "$d" | python3 -m json.tool >/dev/null; done
       - name: scaffold + validate (validators via docker)
         run: |
           bin/k8sa-scaffold "$RUNNER_TEMP/demo" demo 8080 /healthz ghcr.io/example
           K8SA_TRIVY_DOCKER=1 bin/k8sa-validate "$RUNNER_TEMP/demo"
+      - name: scaffold --helm + validate (helm via docker)
+        run: |
+          bin/k8sa-scaffold --helm "$RUNNER_TEMP/helm" demo 8080 /healthz ghcr.io/example
+          K8SA_TRIVY_DOCKER=1 bin/k8sa-validate "$RUNNER_TEMP/helm"
+      - name: validate dev-service templates
+        run: bin/k8sa-validate skills/k8s-anything/assets/kustomize/dev-services
 
   eval-reference:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: score the reference run
-        run: |
-          cp -R examples/flask-redis "$RUNNER_TEMP/app"
-          cp -R evals/flask-redis/reference/. "$RUNNER_TEMP/app/"
-          python3 evals/check.py evals/flask-redis "$RUNNER_TEMP/app"
+      - name: score every reference run
+        run: evals/run_all.sh
 
   smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [flask-redis, nextjs-app, go-multiservice, django-celery]
     steps:
       - uses: actions/checkout@v4
       - name: install kind
@@ -56,7 +68,7 @@ jobs:
           sudo install kind /usr/local/bin/kind
       - name: smoke test the reference run (dev and prod)
         run: |
-          cp -R examples/flask-redis "$RUNNER_TEMP/app"
-          cp -R evals/flask-redis/reference/. "$RUNNER_TEMP/app/"
+          cp -R "examples/${{ matrix.example }}" "$RUNNER_TEMP/app"
+          cp -R "evals/${{ matrix.example }}/reference/." "$RUNNER_TEMP/app/"
           bin/k8sa-smoke "$RUNNER_TEMP/app" dev
           bin/k8sa-smoke "$RUNNER_TEMP/app" prod
