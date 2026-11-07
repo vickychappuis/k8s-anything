@@ -22,6 +22,22 @@ set `runAsUser/runAsGroup/fsGroup: 1000`. Writable paths for a read-only root FS
 **Rust:** `cargo-chef` for dependency caching; runtime `gcr.io/distroless/cc-debian12`
 (or static musl + `distroless/static`).
 
-**Procfile apps (Heroku-style):** each process type → one workload: `web` →
-Deployment + Service, `worker` → Deployment, `release` → Job. Buildpacks (`pack`)
-reproduce the Heroku build.
+**Procfile apps (Heroku-style):**
+- Build **one image** for all process types. Its `CMD` is the `web` line, and every
+  other workload sets `command` to its own Procfile line. Cite `Procfile:<line>` as
+  evidence. Buildpacks (`pack`) reproduce the Heroku build when no Dockerfile
+  template fits.
+- Map each process type to a workload:
+  - `web` → Deployment + Service. Heroku injects `$PORT`, so set `PORT` in the pod env.
+  - `worker` (any queue consumer) → Deployment, no Service.
+  - Schedulers (`clock`, `beat`, `scheduler`) → singleton Deployment: `replicas: 1`,
+    `strategy: Recreate`, no HPA, no PDB.
+  - `release` → Job (3-translate.md).
+- A Procfile line that uses shell syntax (`$PORT`, `&&`, `cd`) needs
+  `["sh", "-c", "..."]` or an exec-form rewrite. Prefer the rewrite.
+- Heroku apps often assume a writable working directory (sqlite fallbacks, schedule
+  files, caches) and an ephemeral filesystem. Each write path needs an emptyDir, or
+  externalize it.
+- Heroku add-ons become dev-only backing services (`assets/kustomize/dev-services/`:
+  `redis.yaml`, `postgres.yaml`) plus managed services in prod. Config URLs
+  (`DATABASE_URL`, `REDIS_URL`) are secrets.

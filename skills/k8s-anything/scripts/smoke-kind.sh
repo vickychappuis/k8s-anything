@@ -103,6 +103,15 @@ for kind in deploy statefulset; do
     "${K[@]}" -n "$NS" rollout status "$r" --timeout=180s
   done
 done
+# Jobs (migrations, one-offs) must complete; a failed one fails the smoke test.
+for r in $("${K[@]}" -n "$NS" get job -o name); do
+  echo "== wait for $r"
+  if ! "${K[@]}" -n "$NS" wait "$r" --for=condition=complete --timeout=180s; then
+    "${K[@]}" -n "$NS" logs "$r" --tail=30 || true
+    echo "smoke: $r did not complete" >&2
+    exit 1
+  fi
+done
 "${K[@]}" -n "$NS" get pods -o wide
 
 echo
