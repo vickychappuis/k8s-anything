@@ -1,6 +1,6 @@
 {
   "name": "k8s-anything",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Agentic base that transforms any app into a Kubernetes deployment, orchestrating existing tools (docker init, buildpacks, kompose, Move2Kube, kubeconform, kube-linter, kind) with agents that polish the result.",
   "author": {
     "name": "vickychappuis"

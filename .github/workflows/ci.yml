@@ -72,3 +72,9 @@ jobs:
           cp -R "evals/${{ matrix.example }}/reference/." "$RUNNER_TEMP/app/"
           bin/k8sa-smoke "$RUNNER_TEMP/app" dev
           bin/k8sa-smoke "$RUNNER_TEMP/app" prod
+      - name: load + chaos (flask-redis only)
+        if: matrix.example == 'flask-redis'
+        run: |
+          bin/k8sa-chaos --self-test
+          bin/k8sa-load "$RUNNER_TEMP/app" prod --path /healthz --duration 20
+          bin/k8sa-chaos "$RUNNER_TEMP/app" prod --path /healthz --kills 5 --interval 5
