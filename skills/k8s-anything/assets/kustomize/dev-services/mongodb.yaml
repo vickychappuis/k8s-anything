@@ -1,10 +1,14 @@
 # Dev-only MongoDB, standalone (StatefulSet + PVC). Never in base or prod: prod uses a
 # managed MongoDB (e.g. Atlas) and points the app at it via config.
 #
-# Wire it in: copy to overlays/dev/mongodb.yaml and add to overlays/dev/kustomization.yaml:
+# Wire it in: copy to overlays/dev/mongodb.yaml, then merge into the EXISTING keys of
+# overlays/dev/kustomization.yaml (a second `resources:` key silently replaces the
+# first, dropping ../../base):
 #   resources:
+#     - namespace.yaml          # already there
+#     - ../../base              # already there
 #     - mongodb.yaml
-#   secretGenerator:            # obviously fake dev values only
+#   secretGenerator:            # one list for all dev secrets; obviously fake values only
 #     - name: mongodb-credentials
 #       literals:
 #         - MONGO_INITDB_ROOT_USERNAME=app

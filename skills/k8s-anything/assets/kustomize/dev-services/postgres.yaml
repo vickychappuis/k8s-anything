@@ -1,10 +1,14 @@
 # Dev-only PostgreSQL (StatefulSet + PVC). Never in base or prod: prod uses a managed
 # Postgres and points the app at it via config.
 #
-# Wire it in: copy to overlays/dev/postgres.yaml and add to overlays/dev/kustomization.yaml:
+# Wire it in: copy to overlays/dev/postgres.yaml, then merge into the EXISTING keys of
+# overlays/dev/kustomization.yaml (a second `resources:` key silently replaces the
+# first, dropping ../../base):
 #   resources:
+#     - namespace.yaml          # already there
+#     - ../../base              # already there
 #     - postgres.yaml
-#   secretGenerator:            # obviously fake dev values only
+#   secretGenerator:            # one list for all dev secrets; obviously fake values only
 #     - name: postgres-credentials
 #       literals:
 #         - POSTGRES_USER=app
@@ -77,12 +81,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: postgres
-          # Pin a patch release; match the major version the app used before.
+          # Pin a patch release; match the major version the app used before. Changing
+          # the major later needs a fresh volume (kubectl delete pvc data-postgres-0):
+          # the data dir is not upgraded in place. postgres:18.1 also starts with this PGDATA.
           image: postgres:17.11
           envFrom:
             - secretRef:
                 name: postgres-credentials
           env:
+            # A subdirectory: the volume root may hold lost+found, which initdb rejects.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           ports:

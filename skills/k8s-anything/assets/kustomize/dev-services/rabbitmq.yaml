@@ -1,10 +1,14 @@
 # Dev-only RabbitMQ, single node (StatefulSet + PVC). Never in base or prod: prod uses a
 # managed broker (or the RabbitMQ Cluster Operator) and points the app at it via config.
 #
-# Wire it in: copy to overlays/dev/rabbitmq.yaml and add to overlays/dev/kustomization.yaml:
+# Wire it in: copy to overlays/dev/rabbitmq.yaml, then merge into the EXISTING keys of
+# overlays/dev/kustomization.yaml (a second `resources:` key silently replaces the
+# first, dropping ../../base):
 #   resources:
+#     - namespace.yaml          # already there
+#     - ../../base              # already there
 #     - rabbitmq.yaml
-#   secretGenerator:            # obviously fake dev values only
+#   secretGenerator:            # one list for all dev secrets; obviously fake values only
 #     - name: rabbitmq-credentials
 #       literals:
 #         - RABBITMQ_DEFAULT_USER=app
