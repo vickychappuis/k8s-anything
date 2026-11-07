@@ -1,0 +1,70 @@
+# Procfile:2 `worker: celery -A mysite worker --loglevel=info`. Queue consumer: no
+# port, no Service, no HTTP probes. No liveness either: `celery inspect ping` boots
+# Django on every probe and fails while Redis is down, which would restart every
+# worker at once. A crashed worker exits and restarts; a hung task needs a time limit
+# (proposed in K8S_REPORT.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: django-celery-worker
+  labels:
+    app.kubernetes.io/name: django-celery-worker
+    app.kubernetes.io/component: worker
+  annotations:
+    ignore-check.kube-linter.io/no-readiness-probe: "queue consumer: no port, no Service; readiness gates nothing (4-polish.md)"
+spec:
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: django-celery-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: django-celery-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: django-celery
+      automountServiceAccountToken: false
+      # Celery's warm shutdown on SIGTERM finishes running tasks first; this is the
+      # longest a task may run during a rollout. Assumption (tasks here are instant).
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: django-celery
+          # --concurrency pinned to the CPU request: prefork defaults to the node's
+          # core count, not the container's.
+          command: ["celery", "-A", "mysite", "worker", "--loglevel=info", "--concurrency=2"]
+          envFrom:
+            - configMapRef:
+                name: django-celery-config
+            - secretRef:
+                name: django-celery-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi   # assumption: 2 prefork children
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

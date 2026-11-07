@@ -13,7 +13,10 @@ every deviation.
   HTTP path only if that endpoint never touches a dependency.
 - `timeoutSeconds: 3` (the 1s default flaps under load).
 - Workers with no port: no HTTP probes. An `exec` probe only if there's a meaningful
-  check; otherwise none, noted in the report.
+  check; otherwise none, noted in the report. kube-linter's `no-readiness-probe`
+  then fires on the worker (and on Jobs). Annotate the object with
+  `ignore-check.kube-linter.io/no-readiness-probe: "<reason>"`. Don't add a fake
+  probe.
 
 ## Resources
 
@@ -49,6 +52,9 @@ every deviation.
 - Graceful shutdown: native `preStop.sleep` (5s) so endpoints drain;
   `terminationGracePeriodSeconds` > preStop + the app's drain time.
 - Singletons (schedulers, beat): `replicas: 1`, `strategy: Recreate`, no HPA, no PDB.
+  Annotate `ignore-check.kube-linter.io/no-rolling-update-strategy` with the reason.
+- Workers: a fixed `replicas` in prod (≥ 2) plus a PDB. CPU-based HPA is a poor
+  signal for queue depth; suggest KEDA on queue length instead.
 
 ## Networking
 

@@ -1,0 +1,23 @@
+# web and worker only. No PDB for beat: a singleton with minAvailable 1 would block
+# every node drain.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: django-celery
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: django-celery
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: django-celery-worker
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: django-celery-worker

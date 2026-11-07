@@ -1,0 +1,4 @@
+web: gunicorn mysite.wsgi --log-file -
+worker: celery -A mysite worker --loglevel=info
+beat: celery -A mysite beat --loglevel=info
+release: python manage.py migrate --noinput

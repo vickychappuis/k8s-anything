@@ -9,6 +9,7 @@ fixes the details.
 |---|---|
 | Single service, no compose | `k8sa-scaffold <app>/deploy/k8s <name> <port> [health] [registry]` — done, go to Stage 4 |
 | Helm requested | `k8sa-scaffold --helm <app>/deploy/helm …` — then `references/helm.md` |
+| Procfile (Heroku-style) | scaffold the `web` process, then add one workload per other process type in `base/` (`stacks/static-and-other.md`, Procfile section); add-ons → `assets/kustomize/dev-services/` in dev |
 | Compose, kompose installed | scaffold the main service first, then `mkdir -p /tmp/kompose-out && kompose convert -f <compose> -o /tmp/kompose-out/` and mine its output for the other services |
 | Compose, no kompose | scaffold the main service, then translate the remaining services by hand with the mapping below |
 | Many services / Cloud Foundry / mixed sources | Move2Kube (`move2kube plan -s . && move2kube transform --qa-skip`) — low maintenance upstream; use as a fallback for inspiration, not as the base |
@@ -57,3 +58,13 @@ kompose noise: `io.kompose.*` labels/annotations, `status: {}`,
 | singleton scheduler (Celery beat, Sidekiq-cron leader) | Deployment, `replicas: 1`, `strategy: Recreate` |
 | scheduled task | CronJob (`concurrencyPolicy: Forbid` unless safe to overlap) |
 | migrations / one-off | Job (or initContainer if it must gate rollout — say which and why) |
+
+Migration Jobs:
+- Prefer a Job over an initContainer. Every replica runs an initContainer, so
+  migrations would run concurrently.
+- A Job's pod template is immutable, so `kubectl apply` with a new image tag fails on
+  an existing Job. Set `ttlSecondsAfterFinished` so the finished Job deletes itself
+  and the next apply recreates it, or have CI delete it first. Also set
+  `restartPolicy: Never` and a `backoffLimit` that covers the database still
+  starting.
+- Explain the release ordering (migrate, then roll out) in the report.
