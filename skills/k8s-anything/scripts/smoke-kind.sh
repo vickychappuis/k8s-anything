@@ -103,14 +103,31 @@ for kind in deploy statefulset; do
     "${K[@]}" -n "$NS" rollout status "$r" --timeout=180s
   done
 done
-# Jobs (migrations, one-offs) must complete; a failed one fails the smoke test.
+# Jobs (migrations, one-offs, CronJob runs) must complete. Poll rather than
+# `kubectl wait --for=condition=complete`, which sits out its whole timeout on a
+# Job that already failed.
+job_failed() {
+  "${K[@]}" -n "$NS" logs "$1" --tail=30 || true
+  echo "smoke: $1 $2" >&2
+  exit 1
+}
 for r in $("${K[@]}" -n "$NS" get job -o name); do
   echo "== wait for $r"
-  if ! "${K[@]}" -n "$NS" wait "$r" --for=condition=complete --timeout=180s; then
-    "${K[@]}" -n "$NS" logs "$r" --tail=30 || true
-    echo "smoke: $r did not complete" >&2
-    exit 1
-  fi
+  i=0
+  while :; do
+    if ! state="$("${K[@]}" -n "$NS" get "$r" \
+        -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}' 2>/dev/null)"; then
+      echo "smoke: warning: $r was deleted (ttlSecondsAfterFinished?) before its result was read" >&2
+      break
+    fi
+    case " $state" in
+      *" Complete "*) break ;;
+      *" Failed "*) job_failed "$r" "failed" ;;
+    esac
+    i=$((i + 1))
+    [ "$i" -lt 90 ] || job_failed "$r" "did not complete within 180s"
+    sleep 2
+  done
 done
 "${K[@]}" -n "$NS" get pods -o wide
 
