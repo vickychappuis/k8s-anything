@@ -56,6 +56,7 @@ release  one-off    -     -                  -         same                     
 | dev Postgres | `postgres:16.6`, UID 999, read-only root | verified: `docker run --read-only --user 999:999 --cap-drop ALL` + tmpfs for run/tmp/data |
 | dev Redis | assets/kustomize/dev-services/redis.yaml | template (verified upstream) |
 | starts with deps down | web: yes (lazy DB/broker). Worker/beat: retry the broker connection | /healthz served without DB; Celery retries the broker by default |
+| worker liveness | none | `celery inspect ping` boots Django in a new process per probe and goes through Redis, so a broker blip would restart all workers. Hung tasks: `--time-limit` proposed below |
 | SIGTERM | clean | verified `docker stop`: worker "Warm shutdown", beat and gunicorn exit 0 |
 | resources | web 100m/192Mi, worker 100m/192Mi, beat 20m/128Mi, limits 512/512/256Mi | stacks/python.md; assumption |
 
@@ -76,6 +77,7 @@ release  one-off    -     -                  -         same                     
 | mysite/settings.py:5 | no insecure default for `SECRET_KEY` (raise if unset outside DEBUG) | avoid running prod with a known key |
 | mysite/celery.py | `app.conf.beat_schedule_filename = os.environ.get("CELERY_BEAT_SCHEDULE", "celerybeat-schedule")` | the schedule path stays in config instead of the command line |
 | mysite/urls.py | optional `/readyz` that checks DB and broker | readiness could then reflect dependencies |
+| base/worker.yaml (or `CELERY_TASK_TIME_LIMIT`) | `--time-limit` once the longest task is known | the worker has no liveness probe; a time limit kills hung tasks, and it must stay below `terminationGracePeriodSeconds` |
 
 No human was available in this run, so none were applied (SKILL.md conservative default).
 
@@ -85,6 +87,7 @@ No human was available in this run, so none were applied (SKILL.md conservative 
 - If the app gains forms/admin: `CSRF_TRUSTED_ORIGINS` (not read by settings.py today) and static files (`collectstatic` + WhiteNoise or a CDN).
 - Should beat move to `django-celery-beat`'s DatabaseScheduler, keeping schedule state in Postgres?
 - Release ordering in CI: the migrate Job must complete before rolling out code that needs the new schema (see Deploy).
+- GitOps (Argo CD, Flux)? `ttlSecondsAfterFinished` makes them recreate the Job on every sync; use the tool's pre-sync hook for the Job instead.
 
 ## Secrets to provide
 | secret | keys | used by | dev value source |
@@ -117,7 +120,7 @@ Workload: **web** (base + prod)
 | Dedicated SA, token not mounted | done (shared by all four workloads) |
 | runAsNonRoot, seccomp RuntimeDefault | done |
 | No priv-esc, drop ALL, read-only root + emptyDir | done (`/tmp`; verified with docker `--read-only`) |
-| preStop sleep + grace period | done (5s / 30s) |
+| preStop sleep + grace period | done (5s / 40s: preStop + gunicorn's 30s graceful timeout) |
 | startupProbe sized | done (120s budget) |
 | readinessProbe on evidenced endpoint | done (/healthz with Host header) |
 | livenessProbe dependency-free | done (TCP) |
@@ -195,12 +198,15 @@ kind load docker-image django-celery:dev
 kubectl apply -k deploy/k8s/overlays/dev
 kubectl -n django-celery-dev wait job/django-celery-migrate --for=condition=complete --timeout=5m
 
-# prod: push the image and create the Secret. Migrate first, then roll out:
+# prod: push the image and create the Secret. Migrate first (the Job plus the
+# Namespace and hashed ConfigMap it needs), then roll out everything:
 kubectl -n django-celery delete job django-celery-migrate --ignore-not-found
-kubectl apply -k deploy/k8s/overlays/prod
+kubectl kustomize deploy/k8s/overlays/prod \
+  | yq 'select(.kind == "Namespace" or .kind == "ConfigMap" or .kind == "Job")' \
+  | kubectl apply -f -
 kubectl -n django-celery wait job/django-celery-migrate --for=condition=complete --timeout=10m
+kubectl apply -k deploy/k8s/overlays/prod
 ```
-Note: one `apply` starts the Job and the new pods together. If a release needs the new
-schema before the code runs, apply the Job alone first
-(`kubectl kustomize deploy/k8s/overlays/prod | yq 'select(.kind=="Job")' | kubectl apply -f -`)
-and wait before applying the rest.
+A single `kubectl apply -k` would start the Job and the new web/worker pods together,
+so new code could run before its migrations. Migrations must stay backward compatible
+with the previous release, which keeps serving during the rollout.

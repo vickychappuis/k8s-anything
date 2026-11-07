@@ -1,5 +1,8 @@
 # Procfile:2 `worker: celery -A mysite worker --loglevel=info`. Queue consumer: no
-# port, no Service, no HTTP probes (see K8S_REPORT.md).
+# port, no Service, no HTTP probes. No liveness either: `celery inspect ping` boots
+# Django on every probe and fails while Redis is down, which would restart every
+# worker at once. A crashed worker exits and restarts; a hung task needs a time limit
+# (proposed in K8S_REPORT.md).
 apiVersion: apps/v1
 kind: Deployment
 metadata:

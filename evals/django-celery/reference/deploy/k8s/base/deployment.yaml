@@ -26,7 +26,8 @@ spec:
     spec:
       serviceAccountName: django-celery
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
+      # preStop 5s + gunicorn's 30s --graceful-timeout for in-flight requests.
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
