@@ -1,0 +1,29 @@
+# Fixed replica count, no HPA: the worker's load is queue depth, not CPU. Each pod
+# claims at most 10 jobs per POLL_INTERVAL tick (cmd/worker/main.go:63-64), so CPU
+# stays near idle even with a growing backlog and a CPU HPA would never scale it.
+# 2 replicas = survives one node/pod loss; safe to run concurrently because jobs are
+# claimed with FOR UPDATE SKIP LOCKED (cmd/worker/main.go:63). Raise by hand (or use
+# a KEDA postgresql scaler on pending jobs) if the backlog grows.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-multiservice-worker
+spec:
+  replicas: 2
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-multiservice-worker
+          matchLabelKeys: ["pod-template-hash"]
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-multiservice-worker
+          matchLabelKeys: ["pod-template-hash"]

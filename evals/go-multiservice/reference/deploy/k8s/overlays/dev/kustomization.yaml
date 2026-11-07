@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: go-multiservice-dev
+resources:
+  - namespace.yaml
+  - ../../base
+  # Dev-only backing service, from docker-compose.yml:29-36. Never in base or prod.
+  - postgres.yaml
+# One image per binary (Dockerfile, --build-arg MAIN=./cmd/<name>).
+images:
+  - name: go-multiservice-api
+    newTag: dev
+  - name: go-multiservice-worker
+    newTag: dev
+# Dev secrets: obviously fake values only. Prod creates go-multiservice-db out-of-band.
+# Compose inlined a real-looking password (docker-compose.yml:14,23,33); not reused.
+secretGenerator:
+  - name: go-multiservice-db
+    literals:
+      - DATABASE_URL=postgres://app:dev-not-a-secret@postgres:5432/app?sslmode=disable
+  - name: postgres
+    literals:
+      - POSTGRES_PASSWORD=dev-not-a-secret

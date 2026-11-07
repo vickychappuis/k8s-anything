@@ -1,0 +1,12 @@
+# Keep one poller running through voluntary disruptions (node drains). With 2
+# replicas (worker-prod.yaml) this allows one eviction at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: go-multiservice-worker
+spec:
+  minAvailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: go-multiservice-worker
