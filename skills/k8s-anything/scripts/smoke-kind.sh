@@ -5,17 +5,17 @@
 # image whose name matches the app's image swapped for the local build, and waits
 # for rollouts and Jobs. Only ever talks to the kind-k8s-anything context, and
 # restores your previous kubectl context afterwards.
-# Multi-image apps: list one image per line in <app>/deploy/k8s/images.txt as
-#   <image name as in base> [docker build args]   e.g.  myapp-worker --build-arg MAIN=./cmd/worker
-# Each is built from the app root (relative -f paths work) and swapped in. Without the
-# file, only the first Deployment's image is built from <app>/Dockerfile.
+# Multi-image apps: <app>/deploy/k8s/images.txt (format: references/5-validate.md).
+# Without it, only the first Deployment's image is built, from <app>/Dockerfile.
 set -euo pipefail
+set -f   # no globbing: build args from images.txt are split on whitespace on purpose
 
 APP="$(cd "${1:?usage: smoke-kind.sh <app-path> [overlay]}" && pwd)"
 OVERLAY="${2:-dev}"
 CLUSTER="k8s-anything"
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.7.0}"
-TIMEOUT="${K8SA_SMOKE_TIMEOUT:-300s}"   # per rollout / Job
+TIMEOUT="${K8SA_SMOKE_TIMEOUT:-300}"   # seconds, per rollout / Job
+case "$TIMEOUT" in ''|*[!0-9]*) echo "K8SA_SMOKE_TIMEOUT must be seconds, got '$TIMEOUT'" >&2; exit 2;; esac
 CTX="kind-$CLUSTER"
 KROOT="$APP/deploy/k8s"
 KDIR="$KROOT/overlays/$OVERLAY"
@@ -35,14 +35,18 @@ IMAGES_FILE="$KROOT/images.txt"
 RIMAGES="$(printf '%s\n' "$RENDERED" | awk '/^[ -]*image:/{gsub(/["\047]/, "", $NF); print $NF}' | sort -u)"
 BUILDS=""
 if [ -f "$IMAGES_FILE" ]; then
-  while read -r name args || [ -n "$name" ]; do
-    case "$name" in ''|'#'*) continue;; esac
-    repo=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"; line="${line%%#*}"          # CRLF files, comments
+    read -r name args <<<"$line" || true
+    [ -n "$name" ] || continue
+    case "$args" in *'|'*) echo "images.txt: '|' not allowed in build args" >&2; exit 2;; esac
+    repo=""   # exact match on the full repository or its last path segment, never a prefix
     for img in $RIMAGES; do
-      r="$(repo_of "$img")"; [ "${r##*/}" = "$name" ] && { repo="$r"; break; }
+      r="$(repo_of "$img")"
+      if [ "$r" = "$name" ] || [ "${r##*/}" = "${name##*/}" ]; then repo="$r"; break; fi
     done
     [ -n "$repo" ] || { echo "images.txt: '$name' is not used by overlay $OVERLAY" >&2; exit 2; }
-    BUILDS="$BUILDS$repo|$name|$args
+    BUILDS="$BUILDS$repo|${name##*/}|$args
 "
   done < "$IMAGES_FILE"
   [ -n "$BUILDS" ] || { echo "images.txt lists no images" >&2; exit 2; }
@@ -84,15 +88,6 @@ while IFS='|' read -r repo short args; do
 done <<EOF
 $BUILDS
 EOF
-# Other images (dev backing services) already in the local Docker cache: load them so
-# the node doesn't pull them inside the rollout timeout. Best effort.
-for img in $RIMAGES; do
-  case "$BUILDS" in *"$(repo_of "$img")|"*) continue;; esac
-  if docker image inspect "$img" >/dev/null 2>&1; then
-    kind load docker-image "$img" --name "$CLUSTER" >/dev/null 2>&1 \
-      && echo "== loaded local $img" || echo "== could not load $img; the node will pull it"
-  fi
-done
 
 # Wrapper kustomization must live under the app tree: kustomize rejects absolute
 # resource paths.
@@ -138,20 +133,53 @@ for name, keys in sorted(refs.items()):
     if name not in defined:
         print(name, " ".join(sorted(keys)))
 ' | while read -r sname skeys; do
+  echo "$sname" >> "$WORK/placeholders"
   echo "== placeholder Secret $sname (keys: ${skeys:-none}) — smoke test only"
   set -- ; for k in $skeys; do set -- "$@" "--from-literal=$k=smoke-placeholder"; done
   "${K[@]}" -n "$NS" create secret generic "$sname" "$@" --dry-run=client -o yaml | "${K[@]}" apply -f -
 done
 
+# Jobs first: a failing migration fails the smoke test as soon as the Job gives up,
+# instead of after a rollout that waits for its schema times out.
+JOB_FAILED=0
+job_diag() { # Job conditions, then pod logs (a failed OnFailure pod may be gone)
+  "${K[@]}" -n "$NS" get "$1" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} {.message}{"\n"}{end}' 2>&1 | sed 's/^/   | /' || true
+  "${K[@]}" -n "$NS" logs "$1" --all-containers --tail=30 --request-timeout=10s 2>&1 | sed 's/^/   | /' || true
+}
+wait_job() { # $1 = job/<name>
+  local end=$(( $(date +%s) + TIMEOUT )) st
+  while :; do
+    st="$("${K[@]}" -n "$NS" get "$1" --ignore-not-found \
+      -o jsonpath='{.metadata.name}{range .status.conditions[?(@.status=="True")]}{" "}{.type}{end}')"
+    case " $st " in
+      "  ") echo "   $1 is gone (ttlSecondsAfterFinished)"; return 0;;
+      *" Complete "*) echo "   $1 complete"; return 0;;
+      *" Failed "*|*" FailureTarget "*)
+        job_diag "$1"
+        # Prod overlays have no database: a Job fed placeholder Secrets can't succeed.
+        if [ -f "$WORK/placeholders" ] && "${K[@]}" -n "$NS" get "$1" -o yaml \
+            | grep -qwFf "$WORK/placeholders"; then
+          echo "   WARN: $1 failed; it uses placeholder Secrets, so that's expected here"
+          return 0
+        fi
+        echo "FAIL: $1 failed" >&2; JOB_FAILED=1; return 0;;
+    esac
+    if [ "$(date +%s)" -ge "$end" ]; then
+      job_diag "$1"
+      echo "FAIL: $1 not complete after ${TIMEOUT}s" >&2; JOB_FAILED=1; return 0
+    fi
+    sleep 5
+  done
+}
+echo "== wait for Jobs"
+for r in $("${K[@]}" -n "$NS" get job -o name); do wait_job "$r"; done
+[ "$JOB_FAILED" = 0 ] || exit 1
+
 echo "== wait for rollouts"
 for kind in deploy statefulset; do
   for r in $("${K[@]}" -n "$NS" get "$kind" -o name); do
-    "${K[@]}" -n "$NS" rollout status "$r" --timeout="$TIMEOUT"
+    "${K[@]}" -n "$NS" rollout status "$r" --timeout="${TIMEOUT}s"
   done
-done
-# Jobs (migrations, one-offs) must complete; a finished Job may already be gone (TTL).
-for r in $("${K[@]}" -n "$NS" get job -o name); do
-  "${K[@]}" -n "$NS" wait --for=condition=complete "$r" --timeout="$TIMEOUT"
 done
 "${K[@]}" -n "$NS" get pods -o wide
 

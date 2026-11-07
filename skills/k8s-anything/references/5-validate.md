@@ -41,12 +41,25 @@ into a `smoke-<app>-<overlay>` namespace, waits for Deployments/StatefulSets to 
 out and for Jobs to complete. Your previous kubectl context is restored. Requires
 Docker, kind, python3.
 
-By default only the first Deployment's image is built, from `<app>/Dockerfile`.
-Apps with several images need `deploy/k8s/images.txt` (see `3-translate.md`). Every
-image listed there is built from the app root with its build args, loaded into kind
-and swapped in. Stock images that are already in the local Docker cache (such as a dev
-Postgres) are loaded into kind too, so the node doesn't pull them while the rollout
-is waiting. The rollout and Job timeout is `K8SA_SMOKE_TIMEOUT` (default 300s).
+Jobs are waited for first and fail the test as soon as they fail (logs are printed),
+except Jobs that read a placeholder Secret: those only warn. The wait per Job and per
+rollout is `K8SA_SMOKE_TIMEOUT` seconds (default 300).
+
+### `deploy/k8s/images.txt` (several app images)
+
+Without it, only the first Deployment's image is built, from `<app>/Dockerfile`. With
+it, every image listed is built from the app root, loaded into kind and swapped in:
+
+```text
+# <image name as in base>  [docker build args]
+myapp-api     --build-arg MAIN=./cmd/api
+myapp-worker  --build-arg MAIN=./cmd/worker
+```
+
+- The name must equal an image's repository in the rendered overlay, or its last path
+  segment (`myapp-api` matches `registry.example.com/myapp-api`, never `myapp-api-v2`).
+- Build args are split on whitespace with no quoting; `#` starts a comment; `|` is not
+  allowed. Use `-f path/Dockerfile` for another Dockerfile.
 
 ## Loop
 
