@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nextjs-app-dev
+resources:
+  - namespace.yaml
+  - ../../base
+  # No backing services: the app has none.
+images:
+  - name: nextjs-app
+    newTag: dev
+configMapGenerator:
+  - name: nextjs-app-config
+    behavior: merge
+    literals:
+      - GREETING=Hello from dev
+# Dev secrets: obviously fake values only. Prod creates the Secret out-of-band.
+secretGenerator:
+  - name: nextjs-app-secrets
+    literals:
+      - API_SECRET=dev-not-a-secret
+# NEXT_PUBLIC_API_BASE_URL can't be set here (build-time). Build the dev image with
+#   docker build --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:3000/api -t nextjs-app:dev .

@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextjs-app
+  labels:
+    app.kubernetes.io/name: nextjs-app
+    app.kubernetes.io/component: web
+spec:
+  # No `replicas` here on purpose: dev runs the default (1) and in prod the HPA owns
+  # the count. Setting it would reset autoscaling on every `kubectl apply`.
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nextjs-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nextjs-app
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: nextjs-app
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # Matches the Dockerfile's USER 10001:10001.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: nextjs-app
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            # GREETING (app/page.js:7), read per request.
+            - configMapRef:
+                name: nextjs-app-config
+            # API_SECRET (app/api/secure/route.js:2). Server-only secret.
+            - secretRef:
+                name: nextjs-app-secrets
+          # NEXT_PUBLIC_API_BASE_URL is NOT set here on purpose: `next build` inlines
+          # it into the bundle (app/api-base.js:5), so a runtime value does nothing.
+          # It is a Docker build arg — see the Dockerfile and K8S_REPORT.md.
+          env:
+            # `next start` reads PORT (default 3000) and binds 0.0.0.0 (-H in the Dockerfile).
+            - name: PORT
+              value: "3000"
+            # ≈75% of the 512Mi memory limit (stacks/node.md); assumption.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=384"
+          # /api/health (app/api/health/route.js:1-3) returns {"ok": true} with no
+          # dependencies. Liveness stays a plain TCP check (scaffold default).
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            # Give load balancers time to drop the endpoint before SIGTERM.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi   # stacks/node.md starting point; assumption
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Next.js writes ISR / fetch / image-optimization cache here at runtime.
+            - name: next-cache
+              mountPath: /app/.next/cache
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: next-cache
+          emptyDir:
+            sizeLimit: 256Mi

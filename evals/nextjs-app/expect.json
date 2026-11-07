@@ -1,0 +1,24 @@
+{
+  "source": "examples/nextjs-app",
+  "prompt": "Turn this app into a Kubernetes deployment with dev and prod overlays.",
+  "health_path": "/api/health",
+  "unchanged_files": [
+    "package.json",
+    "package-lock.json",
+    "next.config.mjs",
+    "app/page.js",
+    "app/api-base.js",
+    "app/api/health/route.js",
+    "app/api/secure/route.js"
+  ],
+  "forbidden_cmd_patterns": [
+    "next\\s+dev",
+    "\"dev\"\\s*\\]",
+    "CMD\\s*\\[\\s*\"npm\"",
+    "COPY.*\\.next/standalone",
+    "CMD.*server\\.js"
+  ],
+  "secret_or_dropped_keys": ["API_SECRET", "NEXT_PUBLIC_API_BASE_URL"],
+  "dev_only_images": [],
+  "report_mentions": ["standalone", "NEXT_PUBLIC_API_BASE_URL", "API_SECRET", ".next/cache"]
+}
