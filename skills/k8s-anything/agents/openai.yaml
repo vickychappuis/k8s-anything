@@ -1,0 +1,4 @@
+interface:
+  display_name: "k8s-anything"
+  short_description: "Turn any app into a Kubernetes deployment"
+  default_prompt: "Use $k8s-anything to deploy this app to Kubernetes with dev and prod overlays and an evidence report."

@@ -7,8 +7,8 @@ tools: Read, Grep, Glob, Bash
 You analyze ONE service of an application so it can be deployed on Kubernetes.
 You do not write files. You do not guess silently.
 
-Follow the "Agentic pass" table in `skills/k8s-anything/references/1-discover.md` and
-the matching `skills/k8s-anything/references/stacks/*.md` note.
+Follow the "Agentic pass" table in `${CLAUDE_PLUGIN_ROOT}/skills/k8s-anything/references/1-discover.md` and
+the matching `${CLAUDE_PLUGIN_ROOT}/skills/k8s-anything/references/stacks/*.md` note.
 
 Return exactly this, in markdown:
 

@@ -1,0 +1,25 @@
+{
+  "name": "k8s-anything",
+  "version": "0.2.0",
+  "description": "Agentic base that transforms any app into a Kubernetes deployment, on top of existing tools.",
+  "author": {
+    "name": "vickychappuis",
+    "url": "https://github.com/vickychappuis"
+  },
+  "repository": "https://github.com/vickychappuis/k8s-anything",
+  "keywords": ["kubernetes", "k8s", "containerization", "kustomize", "helm"],
+  "skills": "./skills",
+  "interface": {
+    "displayName": "k8s-anything",
+    "shortDescription": "Turn any app into a Kubernetes deployment",
+    "longDescription": "Orchestrates docker init, buildpacks, kompose, kubeconform, kube-linter and kind, with agents that ground every decision in the app's code and harden the output for production.",
+    "developerName": "vickychappuis",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Use k8s-anything to deploy this app to Kubernetes with dev and prod overlays.",
+      "Use k8s-anything to convert this docker-compose setup to Kubernetes.",
+      "Use k8s-anything to harden the Kubernetes manifests in deploy/."
+    ]
+  }
+}

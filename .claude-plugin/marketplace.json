@@ -3,6 +3,7 @@
   "owner": {
     "name": "vickychappuis"
   },
+  "description": "Turn any app into a Kubernetes deployment with agents on top of existing tools.",
   "plugins": [
     {
       "name": "k8s-anything",

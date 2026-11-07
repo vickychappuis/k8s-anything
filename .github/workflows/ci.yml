@@ -10,7 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck skills/k8s-anything/scripts/*.sh bin/*
 
   templates:
     runs-on: ubuntu-latest
@@ -21,8 +21,8 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
           curl -sSL https://github.com/stackrox/kube-linter/releases/download/v0.8.3/kube-linter-linux.tar.gz | tar xz -C /usr/local/bin kube-linter
       - name: Scaffold template with sample values
-        run: ./scripts/scaffold.sh "$RUNNER_TEMP/demo" demo 8080 /healthz
+        run: ./bin/k8sa-scaffold "$RUNNER_TEMP/demo" demo 8080 /healthz
       - name: Validate rendered overlays
-        run: ./scripts/validate.sh "$RUNNER_TEMP/demo"
+        run: ./bin/k8sa-validate "$RUNNER_TEMP/demo"
       - name: detect.sh on example emits valid JSON
-        run: ./scripts/detect.sh examples/flask-redis | python3 -m json.tool
+        run: ./bin/k8sa-detect examples/flask-redis | python3 -m json.tool

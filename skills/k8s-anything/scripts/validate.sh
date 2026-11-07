@@ -8,8 +8,8 @@ set -uo pipefail
 
 DIR="${1:?usage: validate.sh <dir> [k8s-version]}"
 K8S_VERSION="${2:-1.31.0}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LINT_CFG="$ROOT/policies/kube-linter.yaml"
+SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+LINT_CFG="$SKILL_DIR/assets/kube-linter.yaml"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 fail=0
 
