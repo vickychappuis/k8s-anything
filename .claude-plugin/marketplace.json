@@ -1,0 +1,13 @@
+{
+  "name": "k8s-anything",
+  "owner": {
+    "name": "vickychappuis"
+  },
+  "plugins": [
+    {
+      "name": "k8s-anything",
+      "source": "./",
+      "description": "Transform any app into a Kubernetes deployment with agents on top of existing tools."
+    }
+  ]
+}

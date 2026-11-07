@@ -1,0 +1,6 @@
+.DS_Store
+*.bak
+.env
+.env.*
+!.env.example
+/tmp/

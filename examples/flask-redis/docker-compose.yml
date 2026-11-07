@@ -1,0 +1,17 @@
+# Deliberately naive compose file: test input for the k8s-anything pipeline.
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: change-me
+    depends_on:
+      - redis
+  redis:
+    image: redis:7
+    volumes:
+      - redis-data:/data
+volumes:
+  redis-data:

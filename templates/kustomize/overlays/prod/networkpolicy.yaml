@@ -1,0 +1,22 @@
+# Default-deny ingress for the namespace, then allow traffic to the app port.
+# Tighten "from" using the dependency graph found in Discover.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: APP_NAME-allow-http
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: APP_NAME
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - port: http

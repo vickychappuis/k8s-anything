@@ -1,0 +1,23 @@
+# kube-linter config used by scripts/validate.sh
+# Default checks + a curated set of extras. We avoid addAllBuiltIn: several built-ins
+# are opinions that don't fit every app (3+ replicas, node affinity, DNSConfig).
+checks:
+  include:
+    - latest-tag
+    - liveness-port
+    - readiness-port
+    - startup-port
+    - no-rolling-update-strategy
+    - pdb-unhealthy-pod-eviction-policy
+    - pdb-min-available
+    - pdb-max-unavailable
+    - drop-net-raw-capability
+    - privileged-ports
+    - sensitive-host-mounts
+    - env-var-secret
+    - read-secret-from-env-var
+  exclude:
+    # CPU limits are intentionally omitted by default (throttling); see 4-polish.md.
+    - unset-cpu-requirements
+    # Prod overlay spreads replicas with topologySpreadConstraints instead of anti-affinity.
+    - no-anti-affinity

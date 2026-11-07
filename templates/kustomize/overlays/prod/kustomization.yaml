@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: APP_NAME
+resources:
+  - ../../base
+  - pdb.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  # - ingress.yaml
+images:
+  - name: APP_NAME
+    newName: REGISTRY/APP_NAME
+    newTag: "0.1.0"   # never latest
+patches:
+  - path: deployment-prod.yaml
