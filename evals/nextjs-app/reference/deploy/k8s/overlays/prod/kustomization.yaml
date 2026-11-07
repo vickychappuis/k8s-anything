@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: nextjs-app
+resources:
+  - namespace.yaml
+  - ../../base
+  - pdb.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  # Public route: Gateway API (preferred). Gateway name/namespace and hostname are
+  # placeholders (open questions in K8S_REPORT.md).
+  - httproute.yaml
+  # (Ingress alternative: see assets/kustomize/overlays/prod/ingress.yaml in k8s-anything)
+# Base labels don't reach overlay-only resources (PDB, HPA, policies); repeat them.
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/part-of: nextjs-app
+      app.kubernetes.io/managed-by: k8s-anything
+images:
+  - name: nextjs-app
+    newName: registry.example.com/nextjs-app
+    # Pin a release tag, ideally also `digest: sha256:...`; never latest.
+    # This image must be built with the prod NEXT_PUBLIC_API_BASE_URL build arg.
+    newTag: "0.1.0"
+patches:
+  - path: deployment-prod.yaml
+# API_SECRET comes from the Secret nextjs-app-secrets, created out-of-band in this
+# namespace (see base/secret.example.yaml).
