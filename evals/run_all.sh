@@ -47,8 +47,11 @@ for name in "${names[@]}"; do
   if [ ! -f "$ev/expect.json" ] || [ ! -d "$ev/reference" ]; then
     result="missing expect.json or reference/"
   else
-    src="$(python3 "$here/check.py" --print-source "$ev")"
-    if [ -z "$src" ] || [ ! -d "$repo/$src" ]; then
+    # check.py exits 2 on an invalid expect.json; record it instead of aborting (set -e).
+    src="$(python3 "$here/check.py" --print-source "$ev" 2>"$log")" || src=""
+    if [ -z "$src" ]; then
+      result="invalid expect.json: $(head -n 3 "$log" | tr '\n' ' ')"
+    elif [ ! -d "$repo/$src" ]; then
       result="source '$src' not found"
     else
       app="$work/$name"
