@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "k8s-anything app chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "containerPort", "service", "autoscaling", "resources", "podSecurityContext", "securityContext"],
+  "definitions": {
+    "probe": {
+      "type": ["object", "null"],
+      "properties": {
+        "timeoutSeconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+      "maxLength": 63
+    }
+  },
+  "properties": {
+    "global": {"type": "object"},
+    "nameOverride": {"$ref": "#/definitions/name"},
+    "fullnameOverride": {"$ref": "#/definitions/name"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {
+          "type": "string",
+          "description": "Release tag. Empty = Chart.appVersion. Never latest.",
+          "not": {"pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"}
+        },
+        "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}
+    },
+    "replicaCount": {"type": ["integer", "null"], "minimum": 0, "description": "Only with autoscaling disabled; null = 1."},
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minReplicas": {"type": "integer", "minimum": 1},
+        "maxReplicas": {"type": "integer", "minimum": 1},
+        "targetCPUUtilizationPercentage": {"type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {"type": "boolean"},
+        "name": {"$ref": "#/definitions/name"},
+        "automountToken": {"type": "boolean"},
+        "annotations": {"type": "object"}
+      }
+    },
+    "podAnnotations": {"type": "object"},
+    "podLabels": {"type": "object"},
+    "containerPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {"enum": ["ClusterIP", "NodePort", "LoadBalancer"]},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Non-secret config only. Secrets go in existingSecret.",
+      "propertyNames": {"pattern": "^[-._a-zA-Z0-9]+$"},
+      "additionalProperties": {"type": ["string", "number", "boolean"]}
+    },
+    "existingSecret": {
+      "description": "Name of a Secret created out-of-band. The chart never takes secret values.",
+      "$ref": "#/definitions/name"
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {"type": "object", "required": ["name"]}
+    },
+    "startupProbe": {"$ref": "#/definitions/probe"},
+    "readinessProbe": {"$ref": "#/definitions/probe"},
+    "livenessProbe": {"$ref": "#/definitions/probe"},
+    "preStopSleepSeconds": {"type": "integer", "minimum": 0},
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 0},
+    "resources": {
+      "type": "object",
+      "required": ["requests"],
+      "properties": {
+        "requests": {"type": "object", "required": ["cpu", "memory"]},
+        "limits": {"type": "object"}
+      }
+    },
+    "podSecurityContext": {"type": "object"},
+    "securityContext": {"type": "object"},
+    "extraVolumes": {"type": "array"},
+    "extraVolumeMounts": {"type": "array"},
+    "topologySpread": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "whenUnsatisfiable": {"enum": ["ScheduleAnyway", "DoNotSchedule"]}
+      }
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "minAvailable": {"type": ["integer", "string"]}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "defaultDenyIngress": {"type": "boolean"},
+        "allowFromNamespaces": {"type": "array", "items": {"$ref": "#/definitions/name"}}
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "parentRefs": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name"]}},
+        "hostnames": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "className": {"type": "string"},
+        "annotations": {"type": "object"},
+        "hosts": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "tls": {"type": "array"}
+      }
+    },
+    "nodeSelector": {"type": "object"},
+    "tolerations": {"type": "array"},
+    "affinity": {"type": "object"}
+  }
+}

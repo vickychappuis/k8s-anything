@@ -1,0 +1,155 @@
+# Defaults are the production shape (HPA, PDB, app NetworkPolicy, topology spread
+# on), like the Kustomize template (base + overlays/prod): a bare `helm install` gets
+# the hardened setup, never a dev one. Only the namespace-wide default-deny is opt-in
+# (see networkPolicy). values-dev.yaml relaxes them for a local cluster;
+# values-prod.yaml pins the image, turns on default-deny and picks the public route.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: REGISTRY/APP_NAME
+  # Empty = Chart.appVersion. Pin a release tag, ideally also `digest`; never latest.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Only with autoscaling.enabled=false (null = 1). Setting it while the HPA is on fails
+# the render: the Deployment then has no `replicas` field, so upgrades never reset
+# the count the HPA chose.
+replicaCount: null
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+  # Empty = the release fullname.
+  name: ""
+  # Only true if the app calls the Kubernetes API.
+  automountToken: false
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+containerPort: APP_PORT
+service:
+  type: ClusterIP
+  port: 80
+
+# Non-secret config -> ConfigMap (envFrom). A checksum annotation rolls pods on change.
+config:
+  LOG_LEVEL: info
+
+# Name of an existing Secret loaded with envFrom. The chart never takes secret values:
+# create it out-of-band (kubectl create secret, External Secrets, Sealed Secrets, SOPS).
+existingSecret: ""
+
+# Extra container env (list of EnvVar). PORT is always set from containerPort.
+extraEnv: []
+
+# Readiness/startup may check dependencies; liveness must not (a DB outage would
+# restart every pod), so liveness is a plain TCP check on the port.
+startupProbe:
+  httpGet:
+    path: HEALTH_PATH
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 24
+readinessProbe:
+  httpGet:
+    path: HEALTH_PATH
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+livenessProbe:
+  tcpSocket:
+    port: http
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Give load balancers time to drop the endpoint before SIGTERM. 0 disables.
+preStopSleepSeconds: 5
+# Must exceed preStopSleepSeconds + the app's own drain time.
+terminationGracePeriodSeconds: 30
+
+# No CPU limit on purpose (throttling). Mark sizes as assumptions in the report.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  # Must match the image's numeric USER. 10001 matches assets/dockerfiles/*;
+  # images with their own user differ (Rails 1000, .NET 1654) — see stacks/.
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# /tmp is always an emptyDir. Add one here for every other path the app writes.
+extraVolumes: []
+extraVolumeMounts: []
+
+# Spread replicas across nodes and zones (the chart fills in the selector).
+topologySpread:
+  enabled: true
+  whenUnsatisfiable: ScheduleAnyway
+
+podDisruptionBudget:
+  # Rendered only with the HPA on or replicaCount > 1 (a 1-replica PDB blocks drains).
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespace-wide default-deny ingress. Off by default because it also isolates every
+  # other pod in the namespace (e.g. a casual install into `default`); the app's own
+  # pods are already isolated by the allow policy. values-prod.yaml turns it on for
+  # the app's dedicated namespace, like overlays/prod.
+  defaultDenyIngress: false
+  # Namespaces allowed to reach the app port besides this one (your Gateway /
+  # Ingress controller). Add peers from the dependency graph found in Discover.
+  allowFromNamespaces:
+    - gateway-system
+
+# Public route: enable at most one. Gateway API preferred. Hostnames are placeholders.
+httpRoute:
+  enabled: false
+  parentRefs:
+    - name: public
+      namespace: gateway-system
+  hostnames:
+    - APP_NAME.example.com
+
+ingress:
+  enabled: false
+  className: example   # your cluster's IngressClass
+  annotations: {}
+  hosts:
+    - APP_NAME.example.com
+  tls: []
+  #  - hosts: [APP_NAME.example.com]
+  #    secretName: APP_NAME-tls
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

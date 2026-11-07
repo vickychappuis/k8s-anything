@@ -4,6 +4,7 @@
 
 ```bash
 k8sa-validate <app>/deploy/k8s
+k8sa-validate <app>/deploy/helm   # charts: helm template per values-*.yaml (references/helm.md)
 ```
 
 Per overlay: `kubectl kustomize` → kubeconform (strict, k8s 1.31 by default; pass a

@@ -12,7 +12,7 @@
 | kubectl | 3–5 | `kubectl kustomize`, apply to kind | `brew install kubectl` | — | `kustomize` binary |
 | kompose | 3 | compose → draft manifests | `brew install kompose` | — | hand mapping in 3-translate |
 | move2kube | 3 | multi-source migration (low maintenance) | `brew install konveyor/move2kube/move2kube` | — | kompose / hand mapping |
-| helm | 3 | chart output; dev backing services | `brew install helm` | — | Kustomize only |
+| helm | 3, 5 | chart output; renders charts in `k8sa-validate` | `brew install helm` | `alpine/helm:3.16.4` (automatic in `k8sa-validate`) | Kustomize only |
 | kubeconform | 5 | schema validation | `brew install kubeconform` | automatic in `k8sa-validate` | — |
 | kube-linter | 5 | best-practice lint | `brew install kube-linter` | automatic in `k8sa-validate` | — |
 | trivy | 2, 5 | config + image scan | `brew install trivy` | `K8SA_TRIVY_DOCKER=1` | skip, note in report |
