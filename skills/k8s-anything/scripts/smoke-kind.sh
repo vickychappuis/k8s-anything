@@ -169,8 +169,18 @@ job_diag() { # Job conditions, then pod logs (a failed OnFailure pod may be gone
   "${K[@]}" -n "$NS" get "$1" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} {.message}{"\n"}{end}' 2>&1 | sed 's/^/   | /' || true
   "${K[@]}" -n "$NS" logs "$1" --all-containers --tail=30 --request-timeout=10s 2>&1 | sed 's/^/   | /' || true
 }
+uses_placeholders() { # $1 = job/<name>
+  [ -f "$WORK/placeholders" ] && "${K[@]}" -n "$NS" get "$1" -o yaml \
+    | grep -qwFf "$WORK/placeholders"
+}
 wait_job() { # $1 = job/<name>
   local end=$(( $(date +%s) + TIMEOUT )) st
+  # Prod overlays have no database: a Job fed placeholder Secrets can't succeed, and
+  # one that retries its connection would only sit out the timeout.
+  if uses_placeholders "$1"; then
+    echo "   WARN: $1 not waited for; it uses placeholder Secrets"
+    return 0
+  fi
   while :; do
     st="$("${K[@]}" -n "$NS" get "$1" --ignore-not-found \
       -o jsonpath='{.metadata.name}{range .status.conditions[?(@.status=="True")]}{" "}{.type}{end}')"
@@ -179,12 +189,6 @@ wait_job() { # $1 = job/<name>
       *" Complete "*) echo "   $1 complete"; return 0;;
       *" Failed "*|*" FailureTarget "*)
         job_diag "$1"
-        # Prod overlays have no database: a Job fed placeholder Secrets can't succeed.
-        if [ -f "$WORK/placeholders" ] && "${K[@]}" -n "$NS" get "$1" -o yaml \
-            | grep -qwFf "$WORK/placeholders"; then
-          echo "   WARN: $1 failed; it uses placeholder Secrets, so that's expected here"
-          return 0
-        fi
         echo "FAIL: $1 failed" >&2; JOB_FAILED=1; return 0;;
     esac
     if [ "$(date +%s)" -ge "$end" ]; then

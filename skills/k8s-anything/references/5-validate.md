@@ -42,9 +42,17 @@ into a `smoke-<app>-<overlay>` namespace, waits for Deployments/StatefulSets to 
 out and for Jobs to complete. Your previous kubectl context is restored. Requires
 Docker, kind, python3.
 
-Jobs are waited for first and fail the test as soon as they fail (logs are printed),
-except Jobs that read a placeholder Secret: those only warn. The wait per Job and per
-rollout is `K8SA_SMOKE_TIMEOUT` seconds (default 300).
+Placeholder Secrets get the keys the manifests reference, plus the keys of any
+`secret*.example.yaml` under `deploy/` with the same name (so `envFrom` works). Keys
+ending in `URL`/`URI` get a parseable URL to an unresolvable host (scheme guessed from
+the name: postgres, mysql, redis, amqp, mongodb, else https), so config parsing
+succeeds and anything that connects fails. Write `secret.example.yaml` for every
+out-of-band Secret.
+
+Jobs are waited for first and fail the test as soon as they fail (logs are printed).
+Jobs that read a placeholder Secret are not waited for (they can't reach a database);
+they only warn. The wait per Job and per rollout is `K8SA_SMOKE_TIMEOUT` seconds
+(default 300).
 
 ### `deploy/k8s/images.txt` (several app images)
 
