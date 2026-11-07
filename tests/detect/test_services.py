@@ -133,6 +133,41 @@ class ComposeServices(DetectCase):
                          [("admin", "apps/admin", ["workspace"]),
                           ("api", "apps/api", ["compose", "workspace"])])
 
+    def test_build_flow_mapping(self):
+        out = self.detect({
+            "compose.yml": "services:\n  api:\n    build: {context: ./api, dockerfile: Dockerfile.dev}\n",
+            "api/requirements.txt": "flask\n",
+            "api/Dockerfile.dev": "EXPOSE 5000\n",
+        })
+        api = self.service(out, "api", "api")
+        self.assertEqual((api["dockerfile"], api["stack"], self.ports(api)),
+                         ("api/Dockerfile.dev", "python", ["5000"]))
+
+    def test_command_ports_and_exec_form(self):
+        out = self.detect({
+            "compose.yml": (
+                "services:\n"
+                "  a:\n    build: ./api\n"
+                "    command: [\"gunicorn\", \"--bind\", \"0.0.0.0:9000\", \"app:app\"]\n"
+                "  b:\n    build: ./api\n    command:\n      - uvicorn\n      - main:app\n"
+                "      - --port=7000\n"),
+            "api/requirements.txt": "flask\n",
+        })
+        a = self.service(out, "api", "a")
+        self.assertEqual((a["kind"], a["ports"]),
+                         ("web", [{"port": "9000", "evidence": "compose.yml:4"}]))
+        b = self.service(out, "api", "b")
+        self.assertEqual((b["kind"], b["ports"]),
+                         ("web", [{"port": "7000", "evidence": "compose.yml:7"}]))
+
+    def test_worker_flags_do_not_make_a_worker(self):
+        out = self.detect({
+            "compose.yml": ("services:\n  api:\n    build: .\n"
+                            "    command: gunicorn app:app --worker-class gevent -b 0.0.0.0:8000\n"),
+            "requirements.txt": "flask\n",
+        })
+        self.assertEqual(self.service(out, ".", "api")["kind"], "web")
+
     def test_build_context_outside_root_or_remote(self):
         out = self.detect({
             "compose.yml": ("services:\n  a:\n    build: ../elsewhere\n"
@@ -159,6 +194,15 @@ class ProcfileServices(DetectCase):
         self.assertEqual(self.service(out, ".", "worker")["kind"], "worker")
         self.assertEqual(self.service(out, ".", "release")["kind"], "unknown")
         self.assertEqual(self.service(out, ".", "release")["ports"], [])
+
+    def test_web_with_worker_class_flag(self):
+        out = self.detect({
+            "requirements.txt": "fastapi\n",
+            "Procfile": ("web: gunicorn main:app --worker-class=uvicorn.workers.UvicornWorker "
+                         "--bind 0.0.0.0:$PORT\nworker: python -m rq.cli worker\n"),
+        })
+        self.assertEqual(self.service(out, ".", "web")["kind"], "web")
+        self.assertEqual(self.service(out, ".", "worker")["kind"], "worker")
 
     def test_procfile_in_subdirectory(self):
         out = self.detect({"backend/Procfile": "web: bundle exec puma -p 5000\n",

@@ -90,6 +90,10 @@ class ComposePorts(DetectCase):
         self.assertEqual(out["compose_services"], ["quoted", "web"])
         self.assertEqual(out["compose_container_ports"], ["8000"])
 
+    def test_flow_mapping_service_is_listed(self):
+        body = "services:\n  web:\n    image: x\n  cache: {image: redis}\n  q: &q {image: y}\n"
+        self.assertEqual(self.compose(body)["compose_services"], ["cache", "q", "web"])
+
     def test_four_space_indent_and_crlf(self):
         body = "services:\r\n    web:\r\n        ports:\r\n            - \"80:5000\"\r\n    redis:\r\n        image: redis\r\n"
         out = self.compose(body, name="compose.yaml")

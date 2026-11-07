@@ -375,8 +375,9 @@ def _unquote(s):
 def compose_info(text):
     """Services of a compose file without a YAML library.
 
-    Returns [{name, line, build: {context, dockerfile} | None, command, ports: [(port, line)]}].
-    `ports` holds the container side of `ports:` and `expose:`.
+    Returns [{name, line, build: {context, dockerfile} | None, command, command_lines,
+    ports: [(port, line)]}]. `ports` holds the container side of `ports:` and `expose:`;
+    ports bound by `command`/`entrypoint` flags are added later by build_services.
     """
     services = []
     in_services, svc_indent, cur = False, None, None
@@ -396,11 +397,11 @@ def compose_info(text):
         if svc_indent is None:
             svc_indent = indent
         if indent <= svc_indent:
-            m = re.match(r"""^(["']?)([^"':\s][^"':]*)\1\s*:\s*(&\S+)?$""", stripped)
+            m = re.match(r"""^(["']?)([^"':\s][^"':]*)\1\s*:\s*(&\S+\s*)?(\{.*)?$""", stripped)
             cur = None
             if indent == svc_indent and m:
                 cur = {"name": m.group(2).strip(), "line": lineno, "build": None,
-                       "command": "", "ports": []}
+                       "command": "", "command_lines": [], "ports": []}
                 services.append(cur)
                 key_indent, block = None, None
             continue
@@ -422,8 +423,17 @@ def compose_info(text):
                         cur["ports"].append((p, lineno))
             elif key == "build":
                 cur["build"] = {"context": _unquote(val) if val else ".", "dockerfile": None}
-            elif key in ("command", "entrypoint") and val:
+                if val.startswith("{"):  # build: {context: ./api, dockerfile: Dockerfile.dev}
+                    cur["build"]["context"] = "."
+                    for item in _flow_items(val.rstrip("}") + "]"):
+                        k, _, v = item.partition(":")
+                        if k.strip() in ("context", "dockerfile") and v.strip():
+                            cur["build"][k.strip()] = _unquote(v)
+            elif key in ("command", "entrypoint"):
+                if val.startswith("["):  # exec form: ["gunicorn", "--bind", "0.0.0.0:80"]
+                    val = " ".join(_unquote(x) for x in _flow_items(val))
                 cur["command"] += " " + val
+                cur["command_lines"].append(lineno)
             continue
         # nested under a service key
         if block in ("ports", "expose"):
@@ -493,8 +503,12 @@ def go_cmd_info(root, rels):
 
 # ---------------------------------------------------------------- services
 
+CMD_FLAG = re.compile(r"(?:^|\s)--?[\w.-]+(?:=\S*)?")
+
+
 def guess_kind(name, command, frameworks, ports, worker_hint=False, by_command=False):
-    if command and WORKER_CMD.search(command):
+    # Flags are dropped first so `gunicorn --worker-class gevent` is not read as a worker.
+    if command and WORKER_CMD.search(CMD_FLAG.sub(" ", command)):
         return "worker"
     if WORKER_NAME.search(name or ""):
         return "worker"
@@ -625,6 +639,9 @@ def build_services(root, idx, compose_svcs, procs, go_cmds):
                 dockerfile = idx.dockerfile_in(path, strict=True)
         inside = not remote and not path.startswith("..") and not path.startswith("/")
         declared = [{"port": p, "evidence": "%s:%d" % (compose_rel, ln)} for p, ln in svc["ports"]]
+        if svc["command_lines"]:
+            ev = "%s:%d" % (compose_rel, svc["command_lines"][0])
+            declared += [{"port": p, "evidence": ev} for p in cmd_ports(svc["command"])]
         evidence = ["%s:%d" % (compose_rel, svc["line"])]
         key = (svc["name"], path)
         if key not in merged:  # the same service may be declared in several compose files
@@ -663,7 +680,7 @@ def build_services(root, idx, compose_svcs, procs, go_cmds):
         ports = [{"port": p, "evidence": ev} for p, ev in ports]
         if dockerfile:
             ports += idx.expose_evidence(dockerfile)
-        kind = guess_kind(name, "", fws, ports or (["serves"] if serves else []))
+        kind = guess_kind(name, "", fws, ports or serves)
         main = next((r for r in rels if base(r) == "main.go"), rels[0])
         found.append(service(name, d, "go-cmd", kind, "go", fws, dockerfile, ports, [main]))
 
@@ -677,8 +694,7 @@ def build_services(root, idx, compose_svcs, procs, go_cmds):
     if not found and idx.stack_of("."):
         found.append(dir_service(idx, base(root) or "app", ".", "root",
                                  sorted(idx.manifests.get(".", []))))
-    order = {id(e): i for i, e in enumerate(found)}
-    return sorted(found, key=lambda e: (e["path"], order[id(e)]))
+    return sorted(found, key=lambda e: e["path"])  # stable: keeps discovery order per path
 
 
 # ---------------------------------------------------------------- main
