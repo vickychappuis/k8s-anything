@@ -1,6 +1,8 @@
-# Defaults are the production shape (HPA, PDB, NetworkPolicy, topology spread on),
-# the same as the Kustomize template (base + overlays/prod). values-dev.yaml relaxes
-# them for a local cluster; values-prod.yaml pins the image and the public route.
+# Defaults are the production shape (HPA, PDB, app NetworkPolicy, topology spread
+# on), like the Kustomize template (base + overlays/prod): a bare `helm install` gets
+# the hardened setup, never a dev one. Only the namespace-wide default-deny is opt-in
+# (see networkPolicy). values-dev.yaml relaxes them for a local cluster;
+# values-prod.yaml pins the image, turns on default-deny and picks the public route.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -13,9 +15,10 @@ image:
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
-# Only used when autoscaling is disabled. With the HPA on, the Deployment has no
-# `replicas` field: the HPA owns the count and upgrades must not reset it.
-replicaCount: 1
+# Only with autoscaling.enabled=false (null = 1). Setting it while the HPA is on fails
+# the render: the Deployment then has no `replicas` field, so upgrades never reset
+# the count the HPA chose.
+replicaCount: null
 
 autoscaling:
   enabled: true
@@ -118,8 +121,11 @@ podDisruptionBudget:
 
 networkPolicy:
   enabled: true
-  # Namespace-wide default-deny ingress (harmless if another release adds one too).
-  defaultDenyIngress: true
+  # Namespace-wide default-deny ingress. Off by default because it also isolates every
+  # other pod in the namespace (e.g. a casual install into `default`); the app's own
+  # pods are already isolated by the allow policy. values-prod.yaml turns it on for
+  # the app's dedicated namespace, like overlays/prod.
+  defaultDenyIngress: false
   # Namespaces allowed to reach the app port besides this one (your Gateway /
   # Ingress controller). Add peers from the dependency graph found in Discover.
   allowFromNamespaces:

@@ -30,7 +30,7 @@
         "tag": {
           "type": "string",
           "description": "Release tag. Empty = Chart.appVersion. Never latest.",
-          "not": {"const": "latest"}
+          "not": {"pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"}
         },
         "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"},
         "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
@@ -40,7 +40,7 @@
       "type": "array",
       "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}
     },
-    "replicaCount": {"type": "integer", "minimum": 0},
+    "replicaCount": {"type": ["integer", "null"], "minimum": 0, "description": "Only with autoscaling disabled; null = 1."},
     "autoscaling": {
       "type": "object",
       "additionalProperties": false,
@@ -134,7 +134,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {"type": "boolean"},
-        "parentRefs": {"type": "array", "items": {"type": "object", "required": ["name"]}},
+        "parentRefs": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name"]}},
         "hostnames": {"type": "array", "items": {"type": "string"}}
       }
     },
@@ -145,7 +145,7 @@
         "enabled": {"type": "boolean"},
         "className": {"type": "string"},
         "annotations": {"type": "object"},
-        "hosts": {"type": "array", "items": {"type": "string"}},
+        "hosts": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
         "tls": {"type": "array"}
       }
     },

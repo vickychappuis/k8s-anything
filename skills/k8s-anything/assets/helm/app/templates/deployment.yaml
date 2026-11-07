@@ -1,3 +1,4 @@
+{{- include "APP_NAME.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +7,7 @@ metadata:
     {{- include "APP_NAME.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ ternary 1 .Values.replicaCount (kindIs "invalid" .Values.replicaCount) }}
   {{- end }}
   {{- /* With the HPA on there is no `replicas` field: it would reset autoscaling on every upgrade. */}}
   revisionHistoryLimit: 5
@@ -27,7 +28,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "APP_NAME.labels" . | nindent 8 }}
+        {{- include "APP_NAME.podLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

@@ -33,13 +33,20 @@ app.kubernetes.io/name: {{ include "APP_NAME.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "APP_NAME.labels" -}}
-helm.sh/chart: {{ include "APP_NAME.chart" . }}
+{{/*
+Pod template labels. No helm.sh/chart here: a chart-only bump must not roll the pods.
+*/}}
+{{- define "APP_NAME.podLabels" -}}
 {{ include "APP_NAME.selectorLabels" . }}
 app.kubernetes.io/version: {{ include "APP_NAME.imageTag" . | trunc 63 | trimSuffix "-" | quote }}
 app.kubernetes.io/component: web
 app.kubernetes.io/part-of: {{ include "APP_NAME.name" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- define "APP_NAME.labels" -}}
+helm.sh/chart: {{ include "APP_NAME.chart" . }}
+{{ include "APP_NAME.podLabels" . }}
 {{- end }}
 
 {{- define "APP_NAME.serviceAccountName" -}}
@@ -66,4 +73,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/* A PDB on a single replica blocks every node drain: render it only with >1. */}}
 {{- define "APP_NAME.pdbEnabled" -}}
 {{- if and .Values.podDisruptionBudget.enabled (or .Values.autoscaling.enabled (gt (int .Values.replicaCount) 1)) }}true{{- end }}
+{{- end }}
+
+{{/* Fail early on combinations the schema can't express. */}}
+{{- define "APP_NAME.validate" -}}
+{{- if and .Values.autoscaling.enabled (not (kindIs "invalid" .Values.replicaCount)) }}
+{{- fail "replicaCount is set but autoscaling.enabled=true: the HPA owns the replica count. Set autoscaling.minReplicas instead, or replicaCount=null." }}
+{{- end }}
+{{- if and .Values.autoscaling.enabled (gt (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas)) }}
+{{- fail "autoscaling.minReplicas must be <= autoscaling.maxReplicas" }}
+{{- end }}
+{{- if and .Values.httpRoute.enabled .Values.ingress.enabled }}
+{{- fail "enable at most one of httpRoute and ingress" }}
+{{- end }}
 {{- end }}

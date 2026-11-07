@@ -1,6 +1,3 @@
-{{- if and .Values.httpRoute.enabled .Values.ingress.enabled }}
-{{- fail "enable at most one of httpRoute and ingress" }}
-{{- end }}
 {{- if .Values.httpRoute.enabled }}
 # Gateway API route. Requires the Gateway API CRDs and a Gateway (parentRefs).
 apiVersion: gateway.networking.k8s.io/v1
