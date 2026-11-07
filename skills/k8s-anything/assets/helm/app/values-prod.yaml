@@ -1,0 +1,35 @@
+# Prod (mirrors overlays/prod): pinned image, HPA owns replicas, PDB, NetworkPolicy,
+# topology spread (all on in values.yaml), one public route.
+#   kubectl create namespace APP_NAME
+#   kubectl label namespace APP_NAME pod-security.kubernetes.io/enforce=restricted
+#   helm install APP_NAME . -n APP_NAME -f values-prod.yaml
+
+image:
+  repository: REGISTRY/APP_NAME
+  tag: "0.1.0"   # pin a release tag, ideally also `digest: sha256:...`; never latest
+  digest: ""
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+config:
+  LOG_LEVEL: info
+
+# Created out-of-band, never in values, e.g.
+#   kubectl -n APP_NAME create secret generic APP_NAME-secrets --from-env-file=.env.prod
+existingSecret: ""
+
+networkPolicy:
+  enabled: true
+  defaultDenyIngress: true
+  allowFromNamespaces:
+    - gateway-system
+
+# Public services: pick one.
+httpRoute:
+  enabled: false
+ingress:
+  enabled: false

@@ -1,0 +1,29 @@
+# Dev (mirrors overlays/dev): local image, one replica, no HPA/PDB/NetworkPolicy.
+#   kubectl create namespace APP_NAME-dev
+#   kubectl label namespace APP_NAME-dev pod-security.kubernetes.io/enforce=restricted
+#   helm install APP_NAME . -n APP_NAME-dev -f values-dev.yaml
+# Dev-only backing services (Redis, Postgres...) are not part of this chart: apply
+# them separately (assets/kustomize/dev-services/) into the same namespace.
+
+image:
+  repository: APP_NAME
+  tag: dev
+
+autoscaling:
+  enabled: false
+replicaCount: 1
+
+config:
+  LOG_LEVEL: debug
+
+# Dev secrets: a Secret with obviously fake values, created before install, e.g.
+#   kubectl -n APP_NAME-dev create secret generic APP_NAME-secrets \
+#     --from-literal=EXAMPLE_API_KEY=dev-not-a-secret
+existingSecret: ""
+
+topologySpread:
+  enabled: false
+podDisruptionBudget:
+  enabled: false
+networkPolicy:
+  enabled: false

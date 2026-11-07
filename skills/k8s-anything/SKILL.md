@@ -15,8 +15,8 @@ Never hand-write what a tool already generates — generate, then edit.
 |---|---|
 | `k8sa-doctor` | which underlying tools are installed; Docker-image fallbacks |
 | `k8sa-detect <app>` | JSON fingerprint of the app (stacks, ports, compose, env, existing k8s) |
-| `k8sa-scaffold <dest> <name> <port> [health] [registry]` | hardened Kustomize base + dev/prod overlays |
-| `k8sa-validate <dir>` | kustomize build + kubeconform + kube-linter + trivy |
+| `k8sa-scaffold [--helm] <dest> <name> <port> [health] [registry]` | hardened Kustomize base + dev/prod overlays (`--helm`: chart in `<dest>/<name>/`) |
+| `k8sa-validate <dir>` | kustomize build or `helm template` per values file + kubeconform + kube-linter + trivy |
 | `k8sa-smoke <app> [overlay]` | build, load and roll out on a local kind cluster |
 
 In Claude Code they're on `PATH` while the plugin is enabled. Anywhere else, run
@@ -41,7 +41,9 @@ deploy/k8s/overlays/prod/        # + PDB, HPA, NetworkPolicy, route
 deploy/k8s/K8S_REPORT.md         # from assets/report-template.md
 ```
 
-Helm requested → `deploy/helm/<app>/` instead, same report.
+Helm requested (`--helm`) → `deploy/helm/<app>/` (chart + `values-dev.yaml` /
+`values-prod.yaml`) instead of `deploy/k8s/base|overlays`, same report. Follow
+`references/helm.md` for scaffold, polish and validate differences.
 
 **App source code:** don't edit it by default. Solve what you can at the
 container/manifest level (server command, env, flags). If a source change is truly

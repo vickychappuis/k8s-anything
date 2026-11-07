@@ -1,0 +1,14 @@
+{{- if include "APP_NAME.pdbEnabled" . }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "APP_NAME.fullname" . }}
+  labels:
+    {{- include "APP_NAME.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "APP_NAME.selectorLabels" . | nindent 6 }}
+{{- end }}

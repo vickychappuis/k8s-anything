@@ -1,0 +1,19 @@
+{{ include "APP_NAME.fullname" . }} {{ include "APP_NAME.imageTag" . }} installed in namespace {{ .Release.Namespace }}.
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "APP_NAME.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "APP_NAME.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -fsS http://127.0.0.1:8080{{ dig "httpGet" "path" "/" (.Values.readinessProbe | default dict) }}
+
+{{- if .Values.existingSecret }}
+
+Env from Secret "{{ .Values.existingSecret }}": it must exist before pods can start
+(the chart never creates it).
+{{- end }}
+{{- if .Values.autoscaling.enabled }}
+
+Replicas are owned by the HPA ({{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }}); it needs metrics-server.
+{{- end }}
+
+The pods run under Pod Security "restricted". Enforce it on the namespace:
+  kubectl label namespace {{ .Release.Namespace }} pod-security.kubernetes.io/enforce=restricted

@@ -9,7 +9,7 @@ docker|2,5|recommended|Docker Desktop, OrbStack or colima|
 kubectl|3-5|required|brew install kubectl|
 kompose|3|optional|brew install kompose|
 move2kube|3|optional|brew install konveyor/move2kube/move2kube|
-helm|3|optional|brew install helm|
+helm|3,5|optional|brew install helm|alpine/helm
 pack|2|optional|brew install buildpacks/tap/pack|
 hadolint|2|optional|brew install hadolint|hadolint/hadolint
 kubeconform|5|recommended|brew install kubeconform|ghcr.io/yannh/kubeconform

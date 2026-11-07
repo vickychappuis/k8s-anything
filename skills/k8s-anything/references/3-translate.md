@@ -8,6 +8,7 @@ fixes the details.
 | Input | Path |
 |---|---|
 | Single service, no compose | `k8sa-scaffold <app>/deploy/k8s <name> <port> [health] [registry]` — done, go to Stage 4 |
+| Helm requested | `k8sa-scaffold --helm <app>/deploy/helm …` — then `references/helm.md` |
 | Compose, kompose installed | scaffold the main service first, then `mkdir -p /tmp/kompose-out && kompose convert -f <compose> -o /tmp/kompose-out/` and mine its output for the other services |
 | Compose, no kompose | scaffold the main service, then translate the remaining services by hand with the mapping below |
 | Many services / Cloud Foundry / mixed sources | Move2Kube (`move2kube plan -s . && move2kube transform --qa-skip`) — low maintenance upstream; use as a fallback for inspiration, not as the base |
