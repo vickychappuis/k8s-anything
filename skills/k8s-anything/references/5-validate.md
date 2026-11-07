@@ -3,31 +3,38 @@
 ## Static
 
 ```bash
-scripts/validate.sh <app>/deploy/k8s
+k8sa-validate <app>/deploy/k8s
 ```
 
-Runs, per overlay (skipping missing tools with a warning):
+Per overlay: `kubectl kustomize` → kubeconform (strict, k8s 1.31 by default; pass a
+version as the 2nd argument) → kube-linter (`assets/kube-linter.yaml`) → trivy config
+(if installed, or `K8SA_TRIVY_DOCKER=1`). Each validator runs from its local binary,
+else from a pinned Docker image if Docker is running.
 
-1. `kubectl kustomize` — it builds at all.
-2. `kubeconform -strict -summary` — schema-valid against the k8s version.
-3. `kube-linter lint --config policies/kube-linter.yaml` — best-practice checks.
-4. `trivy config` — misconfig scan (optional).
+| Exit | Meaning | What you report |
+|---|---|---|
+| 0 | PASS — every check that ran is clean | paste the summary |
+| 1 | FAIL | fix and re-run |
+| 2 | usage error (bad path, no YAML) | fix the call |
+| 3 | INCONCLUSIVE — no validator could run | say so plainly; **never call it a pass** |
 
-Fix every error. For lint findings you intentionally keep, add an
-`ignore-check.kube-linter.io/<check>` annotation **with a reason** and list it in the
-report.
+For a lint finding you intentionally keep, annotate the object with
+`ignore-check.kube-linter.io/<check>: "<reason>"` and list it in the report.
 
-## Dynamic (optional, local only)
+Also validate files not in any kustomization (e.g. an unused `httproute.yaml`) only
+if you changed them.
+
+## Dynamic (optional, local only, ask first)
 
 ```bash
-scripts/smoke-kind.sh <app-path> [overlay]   # default overlay: dev
+k8sa-smoke <app-path> [overlay]   # default: dev
 ```
 
-Creates/reuses a `kind` cluster named `k8s-anything`, builds and loads the image,
-applies the overlay, waits for rollout, and port-forwards to hit the readiness path.
-Requires Docker + kind. Never targets any other context.
+Builds the app image, creates/reuses a `kind` cluster named `k8s-anything`, loads the
+image, swaps it into the overlay's manifests, applies everything into a `smoke-<app>`
+namespace, and waits for Deployments/StatefulSets to roll out. Your previous kubectl
+context is restored. Requires Docker + kind.
 
 ## Loop
 
-Repeat Polish ↔ Validate until static checks are clean. Paste the final summaries
-into `K8S_REPORT.md`.
+Repeat Polish ↔ Validate until clean. Paste final summaries into the report.

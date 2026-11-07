@@ -1,32 +1,46 @@
 # Stage 3 — Translate
 
-Produce first-draft manifests with a tool, then restructure. The draft will be crude;
-Stage 4 fixes it.
+Produce first-draft manifests, then restructure into the template's shape. Stage 4
+fixes the details.
 
-## Pick the translator
+## Pick the path
 
-| Input | Tool | Command |
-|---|---|---|
-| `docker-compose.yml` / `compose.yaml` | kompose | `kompose convert -f compose.yaml -o /tmp/kompose-out` |
-| Multi-service repo, Cloud Foundry, mixed sources | Move2Kube | `move2kube plan -s . && move2kube transform --qa-skip` |
-| Single service, no compose | template | `scripts/scaffold.sh <app>/deploy/k8s <name> <port> [health] [registry]` |
-| Already has Helm chart / manifests | none | skip to Stage 4 and polish what exists |
+| Input | Path |
+|---|---|
+| Single service, no compose | `k8sa-scaffold <app>/deploy/k8s <name> <port> [health] [registry]` — done, go to Stage 4 |
+| Compose, kompose installed | scaffold the main service first, then `mkdir -p /tmp/kompose-out && kompose convert -f <compose> -o /tmp/kompose-out/` and mine its output for the other services |
+| Compose, no kompose | scaffold the main service, then translate the remaining services by hand with the mapping below |
+| Many services / Cloud Foundry / mixed sources | Move2Kube (`move2kube plan -s . && move2kube transform --qa-skip`) — low maintenance upstream; use as a fallback for inspiration, not as the base |
+| Already has manifests or a chart | polish mode (SKILL.md) |
 
-## Restructure into Kustomize
+`kompose -o` writes a single **file** if the path doesn't exist — always create the
+directory first and end the path with `/`.
 
-1. Move tool output into `deploy/k8s/base/`, one file per resource
-   (`<service>-deployment.yaml`, `<service>-service.yaml`, …).
-2. Delete tool noise: `kompose.*` annotations, `status: {}`, `creationTimestamp: null`,
-   empty `resources: {}`.
-3. Replace kompose's `io.kompose.service` labels with the standard set:
-   `app.kubernetes.io/name`, `app.kubernetes.io/component`, `app.kubernetes.io/part-of`.
-   Put common labels in `kustomization.yaml` (`labels:` with `includeSelectors: true`).
-4. Compose `environment:` → ConfigMap (non-secret) + Secret template (secret).
-5. Compose `volumes:` → decide per Discover: emptyDir (cache), PVC (real state), or
-   remove (state externalized).
-6. Compose `depends_on:` → nothing in k8s. Apps must retry connections; if they don't,
-   add an initContainer that waits, and flag it.
-7. Write `overlays/dev` and `overlays/prod` from the template overlays.
+The scaffold is the target shape. Tool output is raw material: copy what's right into
+it, don't keep kompose's structure.
+
+## Compose → Kustomize mapping
+
+| Compose | Kubernetes |
+|---|---|
+| service with `build:` / app image | workload in `base/` (copy the scaffold's Deployment for each extra app service) |
+| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` (single-replica StatefulSet + Service, or Deployment for caches). Prod: external service via config |
+| `environment:` (non-secret) | `configMapGenerator` literals in base |
+| `environment:` (secret) | `secretRef` in the Deployment + `secretGenerator` with fake values in `overlays/dev`; prod Secret created out-of-band (document in report) |
+| env keys the code never reads | drop them; list in report |
+| `ports:` | `containerPort` + Service port (container side only; host side is irrelevant) |
+| `volumes:` named | dev backing service → `volumeClaimTemplates`; app → emptyDir (cache) or PVC (real state) or remove (state externalized) |
+| `depends_on:` | nothing. Check the app tolerates the dependency being down at boot; if it doesn't, add an initContainer wait and flag it |
+| `command:` / `entrypoint:` | container `command`/`args` |
+| `healthcheck:` | evidence for probes |
+
+## Labels
+
+Keep the scaffold's conventions: every resource has explicit
+`app.kubernetes.io/name` selectors; common labels use `includeSelectors: false`
+(selectors are immutable — changing a selector label later breaks `apply`). Remove
+kompose noise: `io.kompose.*` labels/annotations, `status: {}`,
+`creationTimestamp: null`, empty `resources: {}`.
 
 ## Workload kind mapping
 
@@ -34,6 +48,6 @@ Stage 4 fixes it.
 |---|---|
 | web / API | Deployment + Service |
 | worker / consumer | Deployment (no Service) |
-| scheduled | CronJob |
-| migrations / one-off | Job (or initContainer if it must gate rollout — say which) |
-| database in dev only | StatefulSet + headless Service, or Helm chart dependency |
+| singleton scheduler (Celery beat, Sidekiq-cron leader) | Deployment, `replicas: 1`, `strategy: Recreate` |
+| scheduled task | CronJob (`concurrencyPolicy: Forbid` unless safe to overlap) |
+| migrations / one-off | Job (or initContainer if it must gate rollout — say which and why) |

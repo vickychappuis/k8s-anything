@@ -1,22 +1,32 @@
 # Node.js / TypeScript
 
-**Detect:** `package.json`. Framework from deps: `next`, `express`, `fastify`, `@nestjs/core`, `hono`, `remix`, `nuxt`.
+**Detect:** `package.json`. Frameworks: `next`, `express`, `fastify`, `@nestjs/core`,
+`hono`, `nuxt`, `react-router` (v7, formerly Remix), `astro`.
 
-**Port:** `process.env.PORT` usually; defaults — Express/Fastify: whatever's in code,
-Next.js `3000`, NestJS `3000`. Check for `localhost` binds (Fastify defaults to
-`127.0.0.1` → must pass `host: '0.0.0.0'`).
+**Template:** `assets/dockerfiles/node.Dockerfile` (tini as PID 1, UID 10001).
 
-**Build:** respect the lockfile (`package-lock.json` → `npm ci`, `pnpm-lock.yaml` →
-`pnpm i --frozen-lockfile`, `yarn.lock`, `bun.lockb`). Monorepo (turbo/nx) → build
-context is repo root, use `turbo prune --docker` / `pnpm deploy`.
+**Port & bind:** usually `process.env.PORT`. Defaults: Next.js/NestJS `3000`.
+Fastify binds `127.0.0.1` unless `host: '0.0.0.0'` — that's a source change; check
+for an env override first.
 
-**Next.js:** set `output: 'standalone'` and copy `.next/standalone` + `.next/static` +
-`public`. `NEXT_PUBLIC_*` vars are baked at build time → build args, not runtime env (flag this).
+**Lockfiles:** `package-lock.json` → `npm ci`; `pnpm-lock.yaml` → `pnpm i
+--frozen-lockfile`; `yarn.lock` → `yarn install --immutable`; `bun.lock` (text, Bun
+1.2+) or legacy `bun.lockb` → `bun install --frozen-lockfile`. Monorepo (turbo/nx/pnpm
+workspaces): build context is the repo root; use `turbo prune --docker` or `pnpm deploy`.
 
-**Runtime image:** `node:<lts>-slim` or `gcr.io/distroless/nodejs<lts>-debian12`.
-`NODE_ENV=production`. Node handles SIGTERM only if the app does — check for
-`process.on('SIGTERM')`; otherwise use `tini` or `--init`.
+**Signals:** Node as PID 1 ignores SIGTERM unless the app handles it. Run under tini
+(baked into the image). `docker run --init` has no effect in Kubernetes.
 
-**Health:** often missing — propose `/healthz` returning 200.
+**Next.js:**
+- `output: 'standalone'` in `next.config.*`; runtime stage copies
+  `.next/standalone`, `.next/static` → `.next/static`, and `public/`; `CMD ["node", "server.js"]`.
+- Set `ENV HOSTNAME=0.0.0.0`: in a pod `HOSTNAME` is the pod name, and standalone
+  `server.js` binds to it.
+- `readOnlyRootFilesystem` → `emptyDir` at `/app/.next/cache` (ISR / image optimization).
+- `NEXT_PUBLIC_*` are inlined at build time → build args per environment, not runtime
+  env. Flag it.
 
-**Resources:** `100m / 128Mi` request, `512Mi` limit. Set `--max-old-space-size` ≈ 75% of the memory limit.
+**Health:** often missing → propose `/healthz` (source change).
+
+**Resources:** `100m / 128Mi`, limit `512Mi`; `NODE_OPTIONS=--max-old-space-size=384`
+(≈75% of the limit).
