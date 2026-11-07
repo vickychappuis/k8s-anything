@@ -1,0 +1,64 @@
+# Background poller (cmd/worker). Listens on no port (cmd/worker/main.go:1-2), so:
+# no Service, no HTTP probes. The distroless image has no shell, so there is no
+# meaningful exec probe either; a hung worker is not detected (see K8S_REPORT.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-multiservice-worker
+  labels:
+    app.kubernetes.io/name: go-multiservice-worker
+    app.kubernetes.io/component: worker
+  annotations:
+    ignore-check.kube-linter.io/no-readiness-probe: "worker serves no port; nothing to probe (cmd/worker/main.go)"
+    ignore-check.kube-linter.io/no-liveness-probe: "worker serves no port; distroless has no shell for an exec probe"
+spec:
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: go-multiservice-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: go-multiservice-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: go-multiservice
+      automountServiceAccountToken: false
+      # SIGTERM cancels the poll loop and any in-flight UPDATE (cmd/worker/main.go:36-45).
+      # No preStop: no endpoints to drain.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: go-multiservice-worker
+          envFrom:
+            - configMapRef:
+                name: go-multiservice-worker-config
+            # DATABASE_URL (cmd/worker/main.go:18), secret (docker-compose.yml:23).
+            - secretRef:
+                name: go-multiservice-db
+          env:
+            - name: GOMEMLIMIT
+              value: "230MiB"
+          resources:
+            requests:
+              cpu: 50m        # stacks/go.md starting point; assumption
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

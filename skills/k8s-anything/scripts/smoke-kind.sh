@@ -3,14 +3,19 @@
 # Usage: smoke-kind.sh <app-path> [overlay=dev]
 # Builds <app-path>/Dockerfile, loads it into kind, applies the overlay with every
 # image whose name matches the app's image swapped for the local build, and waits
-# for rollouts. Only ever talks to the kind-k8s-anything context, and restores your
-# previous kubectl context afterwards.
+# for rollouts and Jobs. Only ever talks to the kind-k8s-anything context, and
+# restores your previous kubectl context afterwards.
+# Multi-image apps: <app>/deploy/k8s/images.txt (format: references/5-validate.md).
+# Without it, only the first Deployment's image is built, from <app>/Dockerfile.
 set -euo pipefail
+set -f   # no globbing: build args from images.txt are split on whitespace on purpose
 
 APP="$(cd "${1:?usage: smoke-kind.sh <app-path> [overlay]}" && pwd)"
 OVERLAY="${2:-dev}"
 CLUSTER="k8s-anything"
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.7.0}"
+TIMEOUT="${K8SA_SMOKE_TIMEOUT:-300}"   # seconds, per rollout / Job
+case "$TIMEOUT" in ''|*[!0-9]*) echo "K8SA_SMOKE_TIMEOUT must be seconds, got '$TIMEOUT'" >&2; exit 2;; esac
 CTX="kind-$CLUSTER"
 KROOT="$APP/deploy/k8s"
 KDIR="$KROOT/overlays/$OVERLAY"
@@ -19,14 +24,41 @@ for t in docker kind kubectl; do command -v "$t" >/dev/null || { echo "missing: 
 [ -d "$KDIR" ] || { echo "no overlay at $KDIR" >&2; exit 2; }
 [ -f "$APP/Dockerfile" ] || { echo "no Dockerfile in $APP" >&2; exit 2; }
 
-# The app image is the first container image of the first Deployment in the overlay.
 RENDERED="$(kubectl kustomize "$KDIR")"
-APP_IMAGE="$(printf '%s\n' "$RENDERED" | awk '/^kind: Deployment/{d=1} d && /^ *image:/{print $2; exit}')"
-[ -n "$APP_IMAGE" ] || { echo "no Deployment image found in $KDIR" >&2; exit 2; }
-REPO="${APP_IMAGE%@*}"                      # drop digest
-case "${REPO##*/}" in *:*) REPO="${REPO%:*}";; esac   # drop tag (not a registry port)
-SHORT="${REPO##*/}"
-LOCAL="$SHORT:smoke"
+repo_of() { # image ref -> repository (drop digest, then tag but not a registry port)
+  local r="${1%@*}"
+  case "${r##*/}" in *:*) r="${r%:*}";; esac
+  printf '%s' "$r"
+}
+# BUILDS: one "<repo in rendered overlay>|<short name>|<docker build args>" per line.
+IMAGES_FILE="$KROOT/images.txt"
+RIMAGES="$(printf '%s\n' "$RENDERED" | awk '/^[ -]*image:/{gsub(/["\047]/, "", $NF); print $NF}' | sort -u)"
+BUILDS=""
+if [ -f "$IMAGES_FILE" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"; line="${line%%#*}"          # CRLF files, comments
+    read -r name args <<<"$line" || true
+    [ -n "$name" ] || continue
+    case "$args" in *'|'*) echo "images.txt: '|' not allowed in build args" >&2; exit 2;; esac
+    repo=""   # exact match on the full repository or its last path segment, never a prefix
+    for img in $RIMAGES; do
+      r="$(repo_of "$img")"
+      if [ "$r" = "$name" ] || [ "${r##*/}" = "${name##*/}" ]; then repo="$r"; break; fi
+    done
+    [ -n "$repo" ] || { echo "images.txt: '$name' is not used by overlay $OVERLAY" >&2; exit 2; }
+    BUILDS="$BUILDS$repo|${name##*/}|$args
+"
+  done < "$IMAGES_FILE"
+  [ -n "$BUILDS" ] || { echo "images.txt lists no images" >&2; exit 2; }
+else
+  # The app image is the first container image of the first Deployment in the overlay.
+  APP_IMAGE="$(printf '%s\n' "$RENDERED" | awk '/^kind: Deployment/{d=1} d && /^[ -]*image:/{print $NF; exit}')"
+  [ -n "$APP_IMAGE" ] || { echo "no Deployment image found in $KDIR" >&2; exit 2; }
+  REPO="$(repo_of "$APP_IMAGE")"
+  BUILDS="$REPO|${REPO##*/}|
+"
+fi
+SHORT="$(printf '%s' "$BUILDS" | head -n 1 | cut -d'|' -f2)"
 NS="smoke-$(printf '%s-%s' "$SHORT" "$OVERLAY" | tr -c 'a-z0-9-' '-' | cut -c1-55 | sed 's/-*$//')"
 
 PREV_CTX="$(kubectl config current-context 2>/dev/null || true)"
@@ -42,9 +74,20 @@ if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
 fi
 K=(kubectl --context "$CTX")
 
-echo "== build $LOCAL (app image in manifests: $APP_IMAGE)"
-docker build -t "$LOCAL" "$APP"
-kind load docker-image "$LOCAL" --name "$CLUSTER"
+IMAGES_KUST=""
+while IFS='|' read -r repo short args; do
+  [ -n "$repo" ] || continue
+  echo "== build $short:smoke (image in manifests: $repo) ${args:+[$args]}"
+  # shellcheck disable=SC2086  # args are docker flags from images.txt, split on purpose
+  (cd "$APP" && docker build -t "$short:smoke" $args .)
+  kind load docker-image "$short:smoke" --name "$CLUSTER"
+  IMAGES_KUST="$IMAGES_KUST  - name: $repo
+    newName: $short
+    newTag: smoke
+"
+done <<EOF
+$BUILDS
+EOF
 
 # Wrapper kustomization must live under the app tree: kustomize rejects absolute
 # resource paths.
@@ -57,9 +100,7 @@ namespace: $NS
 resources:
   - ../overlays/$OVERLAY
 images:
-  - name: $REPO
-    newName: $SHORT
-    newTag: smoke
+$IMAGES_KUST
 EOF
 # kind ships no Gateway API CRDs; install the pinned standard channel if needed.
 if printf '%s\n' "$RENDERED" | grep -q '^apiVersion: gateway.networking.k8s.io/'; then
@@ -74,9 +115,18 @@ kubectl kustomize "$WORK" | "${K[@]}" apply -f -
 
 # Secrets the overlay references but doesn't define (prod creates them out-of-band):
 # create placeholders so the rollout can be exercised. Never real values.
+# Key names for envFrom-only Secrets come from secret.example.yaml files, if any.
 kubectl kustomize "$WORK" | python3 -I -c '
-import re, sys
+import glob, os, re, sys
 docs = re.split(r"^---\s*$", sys.stdin.read(), flags=re.M)
+examples = {}
+for f in glob.glob(os.path.join(sys.argv[1], "**", "secret*.example.yaml"), recursive=True):
+    for d in re.split(r"^---\s*$", open(f, encoding="utf-8", errors="replace").read(), flags=re.M):
+        n = re.search(r"^  name:\s*[\x27\x22]?([\w.-]+)", d, re.M)
+        body = re.search(r"^(?:stringData|data):\s*\n((?:(?:  .*)?\n)*)", d + "\n", re.M)
+        if n and body:
+            examples.setdefault(n.group(1), set()).update(
+                re.findall(r"^  ([A-Za-z_][\w.-]*):", body.group(1), re.M))
 defined = {re.search(r"^  name:\s*(\S+)", d, re.M).group(1)
            for d in docs if re.search(r"^kind:\s*Secret\s*$", d, re.M)}
 refs = {}
@@ -90,43 +140,68 @@ for d in docs:
             refs.setdefault(n.group(1), set()).update([k.group(1)] if k else [])
 for name, keys in sorted(refs.items()):
     if name not in defined:
-        print(name, " ".join(sorted(keys)))
-' | while read -r sname skeys; do
+        print(name, " ".join(sorted(keys | examples.get(name, set()))))
+' "$APP/deploy" | while read -r sname skeys; do
+  echo "$sname" >> "$WORK/placeholders"
   echo "== placeholder Secret $sname (keys: ${skeys:-none}) — smoke test only"
-  set -- ; for k in $skeys; do set -- "$@" "--from-literal=$k=smoke-placeholder"; done
+  set -- ; for k in $skeys; do
+    # URL-shaped keys get a parseable URL to an unresolvable host, so config parsers
+    # don't crash at import; anything that actually connects still fails.
+    h="placeholder:placeholder@smoke-placeholder.invalid"
+    case "$k" in
+      *DATABASE_URL|*POSTGRES*_URL|*PG*_URL) v="postgres://$h:5432/placeholder" ;;
+      *MYSQL*_URL) v="mysql://$h:3306/placeholder" ;;
+      *REDIS*_URL|*BROKER*_URL|*CACHE*_URL) v="redis://$h:6379/0" ;;
+      *AMQP*_URL|*RABBIT*_URL) v="amqp://$h:5672/" ;;
+      *MONGO*_URL|*MONGO*_URI) v="mongodb://$h:27017/placeholder" ;;
+      *URL|*URI) v="https://$h/" ;;
+      *) v="smoke-placeholder" ;;
+    esac
+    set -- "$@" "--from-literal=$k=$v"
+  done
   "${K[@]}" -n "$NS" create secret generic "$sname" "$@" --dry-run=client -o yaml | "${K[@]}" apply -f -
 done
+
+# Jobs first: a failing migration fails the smoke test as soon as the Job gives up,
+# instead of after a rollout that waits for its schema times out.
+JOB_FAILED=0
+job_diag() { # Job conditions, then pod logs (a failed OnFailure pod may be gone)
+  "${K[@]}" -n "$NS" get "$1" -o jsonpath='{range .status.conditions[*]}{.type}: {.reason} {.message}{"\n"}{end}' 2>&1 | sed 's/^/   | /' || true
+  "${K[@]}" -n "$NS" logs "$1" --all-containers --tail=30 --request-timeout=10s 2>&1 | sed 's/^/   | /' || true
+}
+wait_job() { # $1 = job/<name>
+  local end=$(( $(date +%s) + TIMEOUT )) st
+  while :; do
+    st="$("${K[@]}" -n "$NS" get "$1" --ignore-not-found \
+      -o jsonpath='{.metadata.name}{range .status.conditions[?(@.status=="True")]}{" "}{.type}{end}')"
+    case " $st " in
+      "  ") echo "   $1 is gone (ttlSecondsAfterFinished)"; return 0;;
+      *" Complete "*) echo "   $1 complete"; return 0;;
+      *" Failed "*|*" FailureTarget "*)
+        job_diag "$1"
+        # Prod overlays have no database: a Job fed placeholder Secrets can't succeed.
+        if [ -f "$WORK/placeholders" ] && "${K[@]}" -n "$NS" get "$1" -o yaml \
+            | grep -qwFf "$WORK/placeholders"; then
+          echo "   WARN: $1 failed; it uses placeholder Secrets, so that's expected here"
+          return 0
+        fi
+        echo "FAIL: $1 failed" >&2; JOB_FAILED=1; return 0;;
+    esac
+    if [ "$(date +%s)" -ge "$end" ]; then
+      job_diag "$1"
+      echo "FAIL: $1 not complete after ${TIMEOUT}s" >&2; JOB_FAILED=1; return 0
+    fi
+    sleep 5
+  done
+}
+echo "== wait for Jobs"
+for r in $("${K[@]}" -n "$NS" get job -o name); do wait_job "$r"; done
+[ "$JOB_FAILED" = 0 ] || exit 1
 
 echo "== wait for rollouts"
 for kind in deploy statefulset; do
   for r in $("${K[@]}" -n "$NS" get "$kind" -o name); do
-    "${K[@]}" -n "$NS" rollout status "$r" --timeout=180s
-  done
-done
-# Jobs (migrations, one-offs, CronJob runs) must complete. Poll rather than
-# `kubectl wait --for=condition=complete`, which sits out its whole timeout on a
-# Job that already failed.
-job_failed() {
-  "${K[@]}" -n "$NS" logs "$1" --tail=30 || true
-  echo "smoke: $1 $2" >&2
-  exit 1
-}
-for r in $("${K[@]}" -n "$NS" get job -o name); do
-  echo "== wait for $r"
-  i=0
-  while :; do
-    if ! state="$("${K[@]}" -n "$NS" get "$r" \
-        -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type}{" "}{end}' 2>/dev/null)"; then
-      echo "smoke: warning: $r was deleted (ttlSecondsAfterFinished?) before its result was read" >&2
-      break
-    fi
-    case " $state" in
-      *" Complete "*) break ;;
-      *" Failed "*) job_failed "$r" "failed" ;;
-    esac
-    i=$((i + 1))
-    [ "$i" -lt 90 ] || job_failed "$r" "did not complete within 180s"
-    sleep 2
+    "${K[@]}" -n "$NS" rollout status "$r" --timeout="${TIMEOUT}s"
   done
 done
 "${K[@]}" -n "$NS" get pods -o wide

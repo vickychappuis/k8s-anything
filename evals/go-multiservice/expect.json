@@ -1,0 +1,21 @@
+{
+  "source": "examples/go-multiservice",
+  "prompt": "Turn this app into a Kubernetes deployment with dev and prod overlays.",
+  "health_path": "/healthz",
+  "unchanged_files": [
+    "go.mod",
+    "go.sum",
+    "cmd/api/main.go",
+    "cmd/worker/main.go",
+    "internal/store/store.go",
+    "docker-compose.yml"
+  ],
+  "forbidden_cmd_patterns": [
+    "migrate\\s*&&",
+    "\"sh\"\\s*,\\s*\"-c\"",
+    "go\\s+run"
+  ],
+  "secret_or_dropped_keys": ["DATABASE_URL", "POSTGRES_PASSWORD", "LOG_LEVEL"],
+  "dev_only_images": ["postgres"],
+  "report_mentions": ["DATABASE_URL", "LOG_LEVEL", "depends_on", "9090", "migrate", "worker"]
+}

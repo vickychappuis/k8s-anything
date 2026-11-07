@@ -12,10 +12,11 @@ every deviation.
 - `livenessProbe` must be dependency-free. Default is a TCP check on the port; use an
   HTTP path only if that endpoint never touches a dependency.
 - `timeoutSeconds: 3` (the 1s default flaps under load).
-- Workers with no port: no HTTP probes. An `exec` probe only if there's a meaningful
-  check; otherwise none, noted in the report. kube-linter's `no-readiness-probe`
-  then fires on the worker (and on Jobs). Annotate the object with
-  `ignore-check.kube-linter.io/no-readiness-probe: "<reason>"`. Don't add a fake
+- Workers with no port: no Service, no HTTP probes, no preStop. Add an `exec` probe
+  only if there's a meaningful check; distroless images have no shell. Otherwise
+  leave probes out. Annotate the Deployment with
+  `ignore-check.kube-linter.io/no-readiness-probe` and `.../no-liveness-probe`, give
+  the reason, and note it in the report. Don't add a fake
   probe.
 
 ## Resources
@@ -53,8 +54,9 @@ every deviation.
   `terminationGracePeriodSeconds` > preStop + the app's drain time.
 - Singletons (schedulers, beat): `replicas: 1`, `strategy: Recreate`, no HPA, no PDB.
   Annotate `ignore-check.kube-linter.io/no-rolling-update-strategy` with the reason.
-- Workers: a fixed `replicas` in prod (≥ 2) plus a PDB. CPU-based HPA is a poor
-  signal for queue depth; suggest KEDA on queue length instead.
+- Queue/DB-polling workers: a CPU HPA rarely fits, because backlog doesn't raise CPU.
+  Set a fixed `replicas` in prod (≥ 2 if concurrent consumers are safe) plus a PDB.
+  Suggest KEDA on queue depth as an option.
 
 ## Networking
 
@@ -70,3 +72,11 @@ every deviation.
 
 - Base references the image by bare name; overlays set name/tag via `images:`.
 - Prod: a release tag, ideally pinned by `digest:`. Never `latest`.
+
+## Parallel hardeners
+
+Before Polish, split the manifests so each workload has its own files
+(`base/<svc>-deployment.yaml`, `overlays/prod/<svc>-prod.yaml`, `<svc>-pdb.yaml`).
+Give each hardener its file list and its service profile. Only the main agent edits
+the `kustomization.yaml` files: hardeners report the lines to add. Dev-only backing
+services from `assets/kustomize/dev-services/` don't need a hardener.

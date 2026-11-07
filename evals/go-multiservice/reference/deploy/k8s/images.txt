@@ -1,0 +1,4 @@
+# One image per binary, built from the app root with the Dockerfile there.
+# <image name as in base>  <docker build args>      (read by k8sa-smoke; also a CI hint)
+go-multiservice-api     --build-arg MAIN=./cmd/api
+go-multiservice-worker  --build-arg MAIN=./cmd/worker

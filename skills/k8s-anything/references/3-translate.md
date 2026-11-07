@@ -26,6 +26,21 @@ use (`secret.example.yaml` if there are no secrets, whichever of `httproute.yaml
 The scaffold is the target shape. Tool output is raw material: copy what's right into
 it, don't keep kompose's structure.
 
+## Several app services
+
+- Scaffold once with the **project** name (it names the namespace, part-of label and
+  shared ServiceAccount). Then rename the scaffolded workload to `<project>-<svc>`:
+  Deployment, Service, selectors and image (`<project>-<svc>`). Do the same for the
+  prod HPA, PDB, route and NetworkPolicy. Rename the files to `<svc>-*.yaml`.
+- Use one image per binary or entrypoint, even when one Dockerfile builds them all with
+  a build arg (`stacks/go.md`). List each image in both overlays' `images:`.
+  Write `deploy/k8s/images.txt` (format in `5-validate.md`): `k8sa-smoke` builds
+  from it, and it tells CI how to build each image.
+- A one-off subcommand of an app binary (`api migrate`) reuses that image in a Job
+  with `args`. It doesn't need an image of its own.
+- Give each service only the config it reads: use a ConfigMap per service, and share a
+  Secret only if the services read the same key (e.g. `DATABASE_URL`).
+
 ## Compose → Kustomize mapping
 
 | Compose | Kubernetes |
@@ -60,11 +75,17 @@ kompose noise: `io.kompose.*` labels/annotations, `status: {}`,
 | migrations / one-off | Job (or initContainer if it must gate rollout — say which and why) |
 
 Migration Jobs:
-- Prefer a Job over an initContainer. Every replica runs an initContainer, so
-  migrations would run concurrently.
+- Prefer a Job over an initContainer, and don't copy compose's
+  `sh -c "app migrate && exec app"`: every replica would migrate at once, and
+  distroless images have no `sh`.
 - A Job's pod template is immutable, so `kubectl apply` with a new image tag fails on
-  an existing Job. Set `ttlSecondsAfterFinished` so the finished Job deletes itself
-  and the next apply recreates it, or have CI delete it first. Also set
-  `restartPolicy: Never` and a `backoffLimit` that covers the database still
-  starting.
+  an existing Job. Set `ttlSecondsAfterFinished` (or a GitOps hook) so the next release
+  re-creates it, and `restartPolicy: Never`.
+- Keep `backoffLimit` small (≈4) with `activeDeadlineSeconds` as the bound, so a broken
+  migration fails fast. In dev the in-cluster DB is created in the same apply and may
+  still be pulling or running initdb: patch the Job in `overlays/dev` with an
+  initContainer that waits for it with the DB's own image (`pg_isready -U <user>` in a
+  loop for Postgres). Don't raise `backoffLimit` to cover a slow start.
+- Annotate the Job with
+  `ignore-check.kube-linter.io/no-readiness-probe: "run-to-completion Job, no traffic"`.
 - Explain the release ordering (migrate, then roll out) in the report.

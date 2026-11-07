@@ -1,0 +1,22 @@
+# Copy to the app root as .dockerignore and adjust.
+.git
+.gitignore
+.dockerignore
+Dockerfile*
+deploy/
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+!.env.example
+dist/
+build/
+target/
+.next/
+coverage/
+.idea/
+.vscode/
+*.log

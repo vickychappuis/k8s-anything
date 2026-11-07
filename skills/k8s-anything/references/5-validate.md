@@ -38,8 +38,29 @@ Builds the app image, creates/reuses a `kind` cluster named `k8s-anything`, load
 image, swaps it into the overlay's manifests, installs Gateway API CRDs if the overlay
 uses them, creates clearly-labelled placeholder Secrets for any Secret the overlay
 references but doesn't define (prod creates those out-of-band), applies everything
-into a `smoke-<app>-<overlay>` namespace, and waits for Deployments/StatefulSets to
-roll out. Your previous kubectl context is restored. Requires Docker, kind, python3.
+into a `smoke-<app>-<overlay>` namespace, waits for Deployments/StatefulSets to roll
+out and for Jobs to complete. Your previous kubectl context is restored. Requires
+Docker, kind, python3.
+
+Jobs are waited for first and fail the test as soon as they fail (logs are printed),
+except Jobs that read a placeholder Secret: those only warn. The wait per Job and per
+rollout is `K8SA_SMOKE_TIMEOUT` seconds (default 300).
+
+### `deploy/k8s/images.txt` (several app images)
+
+Without it, only the first Deployment's image is built, from `<app>/Dockerfile`. With
+it, every image listed is built from the app root, loaded into kind and swapped in:
+
+```text
+# <image name as in base>  [docker build args]
+myapp-api     --build-arg MAIN=./cmd/api
+myapp-worker  --build-arg MAIN=./cmd/worker
+```
+
+- The name must equal an image's repository in the rendered overlay, or its last path
+  segment (`myapp-api` matches `registry.example.com/myapp-api`, never `myapp-api-v2`).
+- Build args are split on whitespace with no quoting; `#` starts a comment; `|` is not
+  allowed. Use `-f path/Dockerfile` for another Dockerfile.
 
 ## Loop
 

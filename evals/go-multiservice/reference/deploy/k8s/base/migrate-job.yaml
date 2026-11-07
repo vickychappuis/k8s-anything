@@ -1,0 +1,69 @@
+# Schema migration, translated from compose's `sh -c "/app migrate && exec /app"`
+# (docker-compose.yml:9). A Job instead of a boot step: it runs once per apply, not in
+# every api replica, and distroless has no `sh`. Same image as the api
+# (cmd/api/main.go:33-41, `api migrate`, idempotent CREATE TABLE IF NOT EXISTS).
+# Not an initContainer: neither api (/healthz, 503 on /jobs) nor worker (logs and
+# retries, cmd/worker/main.go:48-51) breaks before the schema exists.
+# Job pod templates are immutable: the TTL removes the finished Job so the next
+# `kubectl apply` (new image tag) can create it again. Caveats:
+#  - Within 300s of the last run, or while it still runs, applying a new tag fails with
+#    "field is immutable" (the rest of the apply still lands). Back-to-back deploys:
+#      kubectl -n <ns> delete job go-multiservice-migrate --ignore-not-found
+#    first (safe: the migration is idempotent).
+#  - Failed runs are also deleted after 300s: read logs promptly
+#    (`kubectl logs job/go-multiservice-migrate --previous`).
+#  - Under Argo CD, replace the TTL with the annotations
+#    argocd.argoproj.io/hook: PreSync and
+#    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+#    (otherwise each sync after the TTL re-creates and re-runs the Job; harmless, noisy).
+# No signal handling on this path (cmd/api/main.go:33-41): SIGTERM aborts it, and the
+# single CREATE TABLE IF NOT EXISTS is atomic, so a re-run is safe.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: go-multiservice-migrate
+  labels:
+    app.kubernetes.io/name: go-multiservice-migrate
+    app.kubernetes.io/component: migration
+  annotations:
+    ignore-check.kube-linter.io/no-readiness-probe: "run-to-completion Job: receives no traffic, readiness is meaningless"
+spec:
+  # The database is expected to be up (managed in prod; dev waits for its in-cluster
+  # Postgres in an initContainer, overlays/dev/migrate-wait-for-postgres.yaml), so a
+  # failure is real: give up after a few retries (~2.5 min of backoff), not 10 minutes.
+  backoffLimit: 4
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: go-multiservice-migrate
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: go-multiservice
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrate
+          image: go-multiservice-api
+          args: ["migrate"]
+          envFrom:
+            - secretRef:
+                name: go-multiservice-db
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
