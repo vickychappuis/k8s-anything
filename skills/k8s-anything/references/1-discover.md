@@ -19,7 +19,9 @@ starting point, not the answer.
 merged with the workspace entry when the context matches), Procfile process
 (`procfile`), or — if none of those — the root app (`root`). Each entry has `name`,
 `path`, `kind` (`web`/`worker`/`unknown`, a guess), `stack`, `frameworks`,
-`dockerfile`, `ports` (`[{port, evidence: "file:line"}]`) and `evidence`. Use it to
+`dockerfile`, `ports` (`[{port, evidence: "file:line"}]`, from `EXPOSE`, compose
+`ports`/`expose`, `--port`/`--bind`/`-p` flags in compose commands, Procfile lines and
+`package.json` scripts, and Go listen addresses) and `evidence`. Use it to
 seed the service table below and to split work across `app-analyst` subagents; confirm
 every `kind` and port in the code. `packages/*` entries are often libraries, not
 services — drop those that are only imported by others. Top-level keys stay
