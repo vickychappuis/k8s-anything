@@ -68,8 +68,11 @@ namespaces; pass `-n <namespace>` instead of the app path to target one directly
 Chaos needs ≥ 2 ready replicas for `delete`/`evict` (use the prod overlay). With
 placeholder Secrets the app's real endpoints may 500 — point `--path` at the health
 endpoint and say so in the report. Only `timeout` failures on a busy shared node are
-noise: re-run `k8sa-load` alone as a baseline before blaming the manifests. Paste the
-result lines into the report.
+noise: re-run `k8sa-load` alone as a baseline before blaming the manifests. A chaos
+PASS on kind is necessary, not sufficient: single-node kind removes endpoints almost
+instantly, so a missing preStop sleep or readiness probe rarely shows up there (it did
+not for flask-redis), while `maxUnavailable`/replica mistakes do. Paste the result
+lines into the report.
 
 ## Loop
 
