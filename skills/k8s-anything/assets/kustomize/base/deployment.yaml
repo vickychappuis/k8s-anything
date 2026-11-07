@@ -6,7 +6,8 @@ metadata:
     app.kubernetes.io/name: APP_NAME
     app.kubernetes.io/component: web
 spec:
-  replicas: 1
+  # No `replicas` here on purpose: dev runs the default (1) and in prod the HPA owns
+  # the count. Setting it would reset autoscaling on every `kubectl apply`.
   revisionHistoryLimit: 5
   selector:
     matchLabels:
@@ -27,6 +28,8 @@ spec:
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
+        # Must match the image's numeric USER. 10001 matches assets/dockerfiles/*;
+        # images with their own user differ (Rails 1000, .NET 1654) — see stacks/.
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
@@ -46,24 +49,33 @@ spec:
           env:
             - name: PORT
               value: "APP_PORT"
-          readinessProbe:
-            httpGet:
-              path: HEALTH_PATH
-              port: http
-            periodSeconds: 10
-            failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: HEALTH_PATH
-              port: http
-            periodSeconds: 20
-            failureThreshold: 3
+          # Readiness may check dependencies; liveness must not (a DB outage would
+          # restart every pod), so liveness is a plain TCP check on the port.
           startupProbe:
             httpGet:
               path: HEALTH_PATH
               port: http
             periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: HEALTH_PATH
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            # Give load balancers time to drop the endpoint before SIGTERM.
+            preStop:
+              sleep:
+                seconds: 5
           resources:
             requests:
               cpu: 100m

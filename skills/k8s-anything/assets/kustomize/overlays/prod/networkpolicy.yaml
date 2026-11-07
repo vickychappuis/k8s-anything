@@ -1,5 +1,7 @@
-# Default-deny ingress for the namespace, then allow traffic to the app port.
-# Tighten "from" using the dependency graph found in Discover.
+# Default-deny ingress for the namespace, then allow the app port from:
+#  - pods in this namespace
+#  - the namespace of your Gateway / Ingress controller (adjust the name)
+# Add more peers from the dependency graph found in Discover.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -18,5 +20,10 @@ spec:
       app.kubernetes.io/name: APP_NAME
   policyTypes: ["Ingress"]
   ingress:
-    - ports:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gateway-system
+      ports:
         - port: http

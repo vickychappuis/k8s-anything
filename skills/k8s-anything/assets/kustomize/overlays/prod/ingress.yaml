@@ -3,7 +3,7 @@ kind: Ingress
 metadata:
   name: APP_NAME
 spec:
-  ingressClassName: nginx
+  ingressClassName: example   # your cluster's IngressClass
   rules:
     - host: APP_NAME.example.com
       http:

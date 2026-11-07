@@ -1,23 +1,36 @@
-# kube-linter config used by scripts/validate.sh
-# Default checks + a curated set of extras. We avoid addAllBuiltIn: several built-ins
-# are opinions that don't fit every app (3+ replicas, node affinity, DNSConfig).
+# kube-linter config used by k8sa-validate.
+# Default checks + curated extras. Not addAllBuiltIn: several built-ins are opinions
+# that don't fit every app (3+ replicas, node affinity, DNSConfig).
 checks:
   include:
     - latest-tag
     - liveness-port
     - readiness-port
     - startup-port
+    - no-readiness-probe
     - no-rolling-update-strategy
     - pdb-unhealthy-pod-eviction-policy
     - pdb-min-available
     - pdb-max-unavailable
+    - dangling-horizontalpodautoscaler
+    - dangling-networkpolicy
+    - dangling-networkpolicypeer-podselector
     - drop-net-raw-capability
     - privileged-ports
     - sensitive-host-mounts
     - env-var-secret
     - read-secret-from-env-var
   exclude:
-    # CPU limits are intentionally omitted by default (throttling); see 4-polish.md.
+    # Replaced by cpu-request below: CPU *limits* are omitted on purpose (throttling).
     - unset-cpu-requirements
-    # Prod overlay spreads replicas with topologySpreadConstraints instead of anti-affinity.
+    # Prod spreads replicas with topologySpreadConstraints instead of anti-affinity.
     - no-anti-affinity
+customChecks:
+  - name: cpu-request
+    description: Every container must request CPU (limits are optional).
+    remediation: Set resources.requests.cpu.
+    template: cpu-requirements
+    params:
+      requirementsType: request
+      lowerBoundMillis: 0
+      upperBoundMillis: 0
