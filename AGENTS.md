@@ -1,42 +1,39 @@
 # AGENTS.md
 
-Instructions for coding agents (Claude Code, Codex, Cursor, Gemini CLI, …).
-
-## Two modes
-
-1. **Using k8s-anything on a target app** — follow
-   [`skills/k8s-anything/SKILL.md`](skills/k8s-anything/SKILL.md). Write output only
-   under the target app's `deploy/k8s/` (plus a Dockerfile/.dockerignore if missing).
-2. **Developing k8s-anything itself** — the rules below.
+Instructions for coding agents working **on this repo**. To *use* k8s-anything on an
+app, follow [`skills/k8s-anything/SKILL.md`](skills/k8s-anything/SKILL.md) instead.
 
 ## Principles (apply to every skill, agent and script here)
 
 - **Tools first, agents second.** If an established tool does a step
-  deterministically, call it and post-process its output. Agents fill gaps and polish;
-  they don't hand-write what `kompose` or `docker init` already produce.
-- **Evidence over guesses.** Every port, env var, probe path and resource number in the
-  output must cite where it came from (file:line, tool output, or "assumption"). These go
-  in `K8S_REPORT.md`.
-- **Degrade gracefully.** Every script must work when an optional tool is missing: warn,
-  skip, and say what was skipped. Never fail silently.
-- **Never touch a live cluster without explicit approval.** Local `kind`/`k3d` clusters
-  created by `scripts/smoke-kind.sh` are the only exception.
-- **No secrets in manifests.** Secrets are referenced (Secret / ExternalSecret /
-  SealedSecret), never inlined.
+  deterministically, call it and post-process its output. Agents fill gaps and polish.
+- **Evidence over guesses.** Every value in generated output cites file:line, tool
+  output, or is listed as an assumption.
+- **Degrade gracefully, never fake success.** Missing tool → Docker fallback → skip
+  with a message. A check that didn't run is never reported as passing.
+- **Self-contained skill.** Everything the skill needs lives under
+  `skills/k8s-anything/`. Paths in SKILL.md and references are relative to that
+  directory. `bin/` only wraps `skills/k8s-anything/scripts/`.
+- **Never touch a live cluster without explicit approval.** The kind cluster created
+  by `k8sa-smoke` is the only exception, and the user's kube context is restored.
+- **No secrets in manifests** outside obviously fake dev values.
 
 ## Conventions
 
-- Skills: `skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`) and
-  optional `references/*.md`. Keep SKILL.md short; push detail into references.
+- Skills: `skills/<name>/SKILL.md` with frontmatter (`name`, `description`); keep
+  SKILL.md short and push detail into `references/`.
 - Subagents: `agents/<name>.md` with frontmatter (`name`, `description`, `tools`).
-- Scripts: POSIX-ish bash, macOS (bash 3.2) compatible, `set -euo pipefail`, pass
-  `shellcheck`.
-- Manifests/templates: must pass `kubeconform -strict` and `kube-linter` with
-  `policies/kube-linter.yaml`.
+  Reference skill files as `${CLAUDE_PLUGIN_ROOT}/skills/k8s-anything/...`.
+- Shell scripts: bash 3.2 compatible (macOS), `shellcheck` clean, quote everything.
+  Anything that parses files or emits JSON is stdlib-only Python 3 instead.
+- Templates must pass `k8sa-validate` after `k8sa-scaffold`.
+- Commit messages: Conventional Commits, no AI co-author trailers.
 
 ## Checks before committing
 
 ```bash
-shellcheck scripts/*.sh
-./scripts/validate.sh templates/kustomize
+shellcheck skills/k8s-anything/scripts/*.sh bin/*
+bin/k8sa-scaffold /tmp/demo demo 8080 && bin/k8sa-validate /tmp/demo
+bin/k8sa-detect examples/flask-redis
+claude plugin validate .
 ```

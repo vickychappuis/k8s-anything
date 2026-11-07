@@ -10,6 +10,7 @@ set -euo pipefail
 APP="$(cd "${1:?usage: smoke-kind.sh <app-path> [overlay]}" && pwd)"
 OVERLAY="${2:-dev}"
 CLUSTER="k8s-anything"
+GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.7.0}"
 CTX="kind-$CLUSTER"
 KROOT="$APP/deploy/k8s"
 KDIR="$KROOT/overlays/$OVERLAY"
@@ -26,10 +27,13 @@ REPO="${APP_IMAGE%@*}"                      # drop digest
 case "${REPO##*/}" in *:*) REPO="${REPO%:*}";; esac   # drop tag (not a registry port)
 SHORT="${REPO##*/}"
 LOCAL="$SHORT:smoke"
-NS="smoke-$(printf '%s' "$SHORT" | tr -c 'a-z0-9-' '-' | cut -c1-50 | sed 's/-*$//')"
+NS="smoke-$(printf '%s-%s' "$SHORT" "$OVERLAY" | tr -c 'a-z0-9-' '-' | cut -c1-55 | sed 's/-*$//')"
 
 PREV_CTX="$(kubectl config current-context 2>/dev/null || true)"
-restore_ctx() { [ -n "$PREV_CTX" ] && kubectl config use-context "$PREV_CTX" >/dev/null 2>&1 || true; }
+restore_ctx() {
+  if [ -n "$PREV_CTX" ]; then kubectl config use-context "$PREV_CTX" >/dev/null 2>&1 || true
+  else kubectl config unset current-context >/dev/null 2>&1 || true; fi
+}
 trap restore_ctx EXIT
 
 if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
@@ -57,10 +61,41 @@ images:
     newName: $SHORT
     newTag: smoke
 EOF
+# kind ships no Gateway API CRDs; install the pinned standard channel if needed.
+if printf '%s\n' "$RENDERED" | grep -q '^apiVersion: gateway.networking.k8s.io/'; then
+  echo "== install Gateway API CRDs $GATEWAY_API_VERSION"
+  "${K[@]}" apply --server-side -f \
+    "https://github.com/kubernetes-sigs/gateway-api/releases/download/$GATEWAY_API_VERSION/standard-install.yaml" >/dev/null
+fi
 # The overlay's own Namespace object is renamed by the namespace transformer.
 echo "== apply overlay '$OVERLAY' into namespace $NS"
 "${K[@]}" create namespace "$NS" --dry-run=client -o yaml | "${K[@]}" apply -f -
 kubectl kustomize "$WORK" | "${K[@]}" apply -f -
+
+# Secrets the overlay references but doesn't define (prod creates them out-of-band):
+# create placeholders so the rollout can be exercised. Never real values.
+kubectl kustomize "$WORK" | python3 -I -c '
+import re, sys
+docs = re.split(r"^---\s*$", sys.stdin.read(), flags=re.M)
+defined = {re.search(r"^  name:\s*(\S+)", d, re.M).group(1)
+           for d in docs if re.search(r"^kind:\s*Secret\s*$", d, re.M)}
+refs = {}
+for d in docs:
+    for m in re.finditer(r"secretRef:\s*\n\s*name:\s*(\S+)", d):
+        refs.setdefault(m.group(1), set())
+    for m in re.finditer(r"secretKeyRef:\s*\n((?:\s+\w+:.*\n){1,3})", d):
+        blk = m.group(1)
+        n = re.search(r"name:\s*(\S+)", blk); k = re.search(r"key:\s*(\S+)", blk)
+        if n:
+            refs.setdefault(n.group(1), set()).update([k.group(1)] if k else [])
+for name, keys in sorted(refs.items()):
+    if name not in defined:
+        print(name, " ".join(sorted(keys)))
+' | while read -r sname skeys; do
+  echo "== placeholder Secret $sname (keys: ${skeys:-none}) — smoke test only"
+  set -- ; for k in $skeys; do set -- "$@" "--from-literal=$k=smoke-placeholder"; done
+  "${K[@]}" -n "$NS" create secret generic "$sname" "$@" --dry-run=client -o yaml | "${K[@]}" apply -f -
+done
 
 echo "== wait for rollouts"
 for kind in deploy statefulset; do

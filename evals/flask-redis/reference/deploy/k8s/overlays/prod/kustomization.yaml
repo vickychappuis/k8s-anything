@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: flask-redis
+resources:
+  - namespace.yaml
+  - ../../base
+  - pdb.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+  # Public route: Gateway API (preferred). Gateway name/namespace and hostname are
+  # placeholders (open questions in K8S_REPORT.md).
+  - httproute.yaml
+  # (Ingress alternative: see assets/kustomize/overlays/prod/ingress.yaml in k8s-anything)
+# Base labels don't reach overlay-only resources (PDB, HPA, policies); repeat them.
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/part-of: flask-redis
+      app.kubernetes.io/managed-by: k8s-anything
+images:
+  - name: flask-redis
+    newName: registry.example.com/flask-redis
+    newTag: "0.1.0"   # pin a release tag, ideally also `digest: sha256:...`; never latest
+patches:
+  - path: deployment-prod.yaml
+# REDIS_URL comes from the Secret flask-redis-secrets, created out-of-band in this
+# namespace and pointing at a managed Redis (see base/secret.example.yaml).

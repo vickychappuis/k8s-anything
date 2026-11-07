@@ -53,7 +53,7 @@ every deviation.
 ## Networking
 
 - ClusterIP Service with a named port.
-- Public web services: Gateway API `HTTPRoute` (`httproute.yaml`) by default;
+- Public web services get exactly one route: Gateway API `HTTPRoute` (`httproute.yaml`) by default;
   `ingress.yaml` only if the cluster has an Ingress controller and no Gateway.
   Hostnames are placeholders — list them as open questions.
 - NetworkPolicy: namespace default-deny ingress + explicit allows from the dependency

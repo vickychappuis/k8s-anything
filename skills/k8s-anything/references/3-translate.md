@@ -16,6 +16,11 @@ fixes the details.
 `kompose -o` writes a single **file** if the path doesn't exist — always create the
 directory first and end the path with `/`.
 
+After scaffolding, make it this app's: replace the sample config (`LOG_LEVEL`,
+`EXAMPLE_API_KEY`) with the app's real keys or delete it, and delete files you don't
+use (`secret.example.yaml` if there are no secrets, whichever of `httproute.yaml` /
+`ingress.yaml` you didn't pick). Nothing without evidence stays.
+
 The scaffold is the target shape. Tool output is raw material: copy what's right into
 it, don't keep kompose's structure.
 
@@ -24,13 +29,13 @@ it, don't keep kompose's structure.
 | Compose | Kubernetes |
 |---|---|
 | service with `build:` / app image | workload in `base/` (copy the scaffold's Deployment for each extra app service) |
-| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` (single-replica StatefulSet + Service, or Deployment for caches). Prod: external service via config |
+| service with a stock image (redis, postgres…) | **dev only**: `overlays/dev/<name>.yaml` — start from `assets/kustomize/dev-services/` (Redis is there and tested); others: single-replica StatefulSet + Service running as the image's own non-root UID. Prod: external service via config |
 | `environment:` (non-secret) | `configMapGenerator` literals in base |
 | `environment:` (secret) | `secretRef` in the Deployment + `secretGenerator` with fake values in `overlays/dev`; prod Secret created out-of-band (document in report) |
 | env keys the code never reads | drop them; list in report |
 | `ports:` | `containerPort` + Service port (container side only; host side is irrelevant) |
 | `volumes:` named | dev backing service → `volumeClaimTemplates`; app → emptyDir (cache) or PVC (real state) or remove (state externalized) |
-| `depends_on:` | nothing. Check the app tolerates the dependency being down at boot; if it doesn't, add an initContainer wait and flag it |
+| `depends_on:` | nothing. Check the app tolerates the dependency being down at boot (if not, add an initContainer wait and flag it). Record the outcome in the report's "Not translated" section |
 | `command:` / `entrypoint:` | container `command`/`args` |
 | `healthcheck:` | evidence for probes |
 

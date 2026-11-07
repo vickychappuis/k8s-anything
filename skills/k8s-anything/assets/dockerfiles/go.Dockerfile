@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# PORT/EXPOSE default to 8080: set both to the port found in Discover.
 # Go service. MAIN is the package to build (e.g. ./cmd/api); one image per binary.
 ARG GO_VERSION=1.23
 FROM golang:${GO_VERSION} AS build

@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-redis
+  labels:
+    app.kubernetes.io/name: flask-redis
+    app.kubernetes.io/component: web
+spec:
+  # No `replicas` here on purpose: dev runs the default (1) and in prod the HPA owns
+  # the count. Setting it would reset autoscaling on every `kubectl apply`.
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flask-redis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flask-redis
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: flask-redis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # Must match the image's numeric USER. 10001 matches assets/dockerfiles/*;
+        # images with their own user differ (Rails 1000, .NET 1654) — see stacks/.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: flask-redis
+          ports:
+            - name: http
+              containerPort: 5000
+          envFrom:
+            - configMapRef:
+                name: flask-redis-config
+            # REDIS_URL (app.py:7). Treated as secret: a redis:// URL can carry a password.
+            - secretRef:
+                name: flask-redis-secrets
+          env:
+            # app.py:21 and the Dockerfile; gunicorn binds 0.0.0.0:$PORT.
+            - name: PORT
+              value: "5000"
+          # /healthz (app.py:15-17) returns {"ok": true} without touching Redis.
+          # Liveness stays a plain TCP check (scaffold default, dependency-free).
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            # Give load balancers time to drop the endpoint before SIGTERM.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi   # stacks/python.md starting point (gunicorn, 2 workers); assumption
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

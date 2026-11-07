@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: flask-redis-dev
+resources:
+  - namespace.yaml
+  - ../../base
+  # Dev-only backing service, from docker-compose.yml:12-15. Never in base or prod.
+  - redis.yaml
+images:
+  - name: flask-redis
+    newTag: dev
+configMapGenerator:
+  - name: flask-redis-config
+    behavior: merge
+    literals:
+      - WEB_CONCURRENCY=1
+# Dev secrets: obviously fake values only. Prod creates the Secret out-of-band.
+# Points at the in-cluster dev Redis below (compose used redis://redis:6379/0).
+secretGenerator:
+  - name: flask-redis-secrets
+    literals:
+      - REDIS_URL=redis://redis:6379/0

@@ -10,4 +10,5 @@ intended as test input. A good k8s-anything run should, among other things:
 - make Redis dev-only (in-cluster) and external in prod
 - drop `depends_on` and confirm the app tolerates Redis being unavailable at start
 
-Try it: open Claude Code here and run `/k8sify`.
+Try it: copy this folder somewhere, open Claude Code there and run `/k8s-anything:k8sify`.
+Score the result with `python3 evals/check.py evals/flask-redis <copy>`.

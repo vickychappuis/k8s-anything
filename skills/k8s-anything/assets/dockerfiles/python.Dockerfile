@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# PORT/EXPOSE default to 8000: set both to the port found in Discover.
 # Python web app (Flask/Django/FastAPI). Replace APP_MODULE (e.g. app:app,
 # mysite.wsgi, or for FastAPI add: -k uvicorn.workers.UvicornWorker).
 # gunicorn honors $PORT (binds 0.0.0.0:$PORT) and $WEB_CONCURRENCY by itself.

@@ -5,24 +5,58 @@ on:
   pull_request:
 
 jobs:
-  scripts:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
         run: shellcheck skills/k8s-anything/scripts/*.sh bin/*
+      - name: python compiles
+        run: python3 -m py_compile skills/k8s-anything/scripts/detect.py evals/check.py
+      - name: skills have frontmatter
+        run: |
+          for f in skills/*/SKILL.md agents/*.md; do
+            head -1 "$f" | grep -qx -- '---' || { echo "no frontmatter: $f"; exit 1; }
+            grep -q '^name: ' "$f" && grep -q '^description: ' "$f" || { echo "missing name/description: $f"; exit 1; }
+          done
+      - name: hadolint Dockerfile templates
+        run: |
+          for f in skills/k8s-anything/assets/dockerfiles/*.Dockerfile; do
+            echo "$f"; docker run --rm -i hadolint/hadolint:v2.12.0 < "$f"
+          done
 
   templates:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install kubeconform and kube-linter
+      - name: detect emits valid JSON
+        run: bin/k8sa-detect examples/flask-redis | python3 -m json.tool
+      - name: scaffold + validate (validators via docker)
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz -C /usr/local/bin kubeconform
-          curl -sSL https://github.com/stackrox/kube-linter/releases/download/v0.8.3/kube-linter-linux.tar.gz | tar xz -C /usr/local/bin kube-linter
-      - name: Scaffold template with sample values
-        run: ./bin/k8sa-scaffold "$RUNNER_TEMP/demo" demo 8080 /healthz
-      - name: Validate rendered overlays
-        run: ./bin/k8sa-validate "$RUNNER_TEMP/demo"
-      - name: detect.sh on example emits valid JSON
-        run: ./bin/k8sa-detect examples/flask-redis | python3 -m json.tool
+          bin/k8sa-scaffold "$RUNNER_TEMP/demo" demo 8080 /healthz ghcr.io/example
+          K8SA_TRIVY_DOCKER=1 bin/k8sa-validate "$RUNNER_TEMP/demo"
+
+  eval-reference:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: score the reference run
+        run: |
+          cp -R examples/flask-redis "$RUNNER_TEMP/app"
+          cp -R evals/flask-redis/reference/. "$RUNNER_TEMP/app/"
+          python3 evals/check.py evals/flask-redis "$RUNNER_TEMP/app"
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install kind
+        run: |
+          curl -sSLo kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+          sudo install kind /usr/local/bin/kind
+      - name: smoke test the reference run (dev and prod)
+        run: |
+          cp -R examples/flask-redis "$RUNNER_TEMP/app"
+          cp -R evals/flask-redis/reference/. "$RUNNER_TEMP/app/"
+          bin/k8sa-smoke "$RUNNER_TEMP/app" dev
+          bin/k8sa-smoke "$RUNNER_TEMP/app" prod

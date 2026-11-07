@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# PORT/EXPOSE default to 8080: set both to the port found in Discover.
 # JVM fallback (Maven wrapper). Prefer the framework's own image tooling first:
 # Spring Boot `./mvnw spring-boot:build-image` or Jib; Quarkus container-image.
 # Gradle: replace the build line with `./gradlew --no-daemon bootJar` and the jar path.

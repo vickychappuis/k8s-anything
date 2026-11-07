@@ -1,0 +1,10 @@
+{
+  "source": "examples/flask-redis",
+  "prompt": "Turn this app into a Kubernetes deployment with dev and prod overlays.",
+  "health_path": "/healthz",
+  "unchanged_files": ["app.py", "requirements.txt"],
+  "forbidden_cmd_patterns": ["CMD\\s*\\[\\s*\"python\"\\s*,\\s*\"app\\.py\"", "flask\\s+run"],
+  "secret_or_dropped_keys": ["SECRET_KEY"],
+  "dev_only_images": ["redis"],
+  "report_mentions": ["127.0.0.1", "SECRET_KEY", "depends_on"]
+}

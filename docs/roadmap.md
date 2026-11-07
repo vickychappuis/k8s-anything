@@ -1,21 +1,23 @@
 # Roadmap
 
-## v0.1 — scaffold (now)
-- [x] 5-stage skill + references, per-stack notes
-- [x] Stage subagents, `/k8sify`, `/k8s-validate`
-- [x] `doctor`, `detect`, `scaffold`, `validate`, `smoke-kind` scripts
-- [x] Hardened Kustomize template, kube-linter policy, prod checklist
-- [x] Example app (flask-redis)
+## v0.1 — scaffold
+- [x] 5-stage skill, references, stack notes, subagents, scripts, Kustomize template
 
-## v0.2 — prove it end-to-end
-- [ ] Run on `examples/flask-redis`, commit expected output as a golden fixture
-- [ ] More examples: Next.js, Spring Boot, Go multi-binary, Rails + Sidekiq, Procfile app
-- [ ] Helm output mode (chart template + values schema)
-- [ ] Eval harness: score runs against fixtures (validate pass, checklist coverage, evidence count)
+## v0.2 — correctness (current)
+- [x] Self-contained skill; `bin/k8sa-*` commands; Codex manifest
+- [x] Hardened scripts (detect in Python, honest validate exit codes, Docker fallbacks)
+- [x] Production-correct templates (HPA owns replicas, Namespace + PSS, probes, Gateway API)
+- [x] Dockerfile templates (python, node, go, jvm), built and run under the pod's security context
+- [x] Eval checker + flask-redis expectations; kind smoke test verified end to end
 
-## v0.3 — reach
-- [ ] MCP server (`k8s-anything-mcp`) exposing scripts as tools
-- [ ] Codex / Cursor / Gemini plugin manifests
+## v0.3 — breadth
+- [ ] More examples + expectations: Next.js, Spring Boot, Go multi-binary, Rails + Sidekiq, Procfile app, multi-service compose
+- [ ] Automated eval runs (agent in CI on each example, scored by `evals/check.py`)
+- [ ] Helm output mode (chart + `values.schema.json`)
+- [ ] Codex marketplace manifest once its local-source format is confirmed
+
+## v0.4 — reach
+- [ ] MCP server exposing detect/scaffold/validate/smoke as tools
 - [ ] GitOps output (Argo CD Application / Flux Kustomization)
 - [ ] External Secrets / Sealed Secrets generation
-- [ ] Gateway API (`HTTPRoute`) option
+- [ ] Egress NetworkPolicy generation from the dependency graph

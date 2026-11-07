@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# PORT/EXPOSE default to 3000: set both to the port found in Discover.
 # Node.js server. Replace APP_ENTRY with the built entry file (e.g. dist/server.js).
 # Lockfile other than npm? swap `npm ci` for `pnpm i --frozen-lockfile` /
 # `yarn install --immutable` / `bun install --frozen-lockfile`.

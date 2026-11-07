@@ -76,5 +76,8 @@ Single service: do it inline — subagents cost more than they save.
 - Stateful backing services (Postgres, Redis, Kafka…) run in-cluster **only in the dev
   overlay**. Prod points at an external/managed service via config.
 - Validation that ran zero checks is **INCONCLUSIVE, not PASS**. Never report it as passing.
+- When this says to ask and nobody can answer (non-interactive run), take the
+  conservative branch — don't edit source, don't run the smoke test, don't overwrite
+  existing manifests — and record the decision in the report.
 - Never `kubectl apply` to a non-kind context without explicit approval. Check
   `kubectl config current-context` first.
