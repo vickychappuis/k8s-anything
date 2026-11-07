@@ -15,7 +15,8 @@
     "next\\s+dev",
     "\"dev\"\\s*\\]",
     "CMD\\s*\\[\\s*\"npm\"",
-    "\\.next/standalone"
+    "COPY.*\\.next/standalone",
+    "CMD.*server\\.js"
   ],
   "secret_or_dropped_keys": ["API_SECRET", "NEXT_PUBLIC_API_BASE_URL"],
   "dev_only_images": [],

@@ -8,7 +8,9 @@ k8s-anything run should, among other things:
 - notice there is **no `output: 'standalone'`** in `next.config.mjs` and either run
   `next start` from pruned `node_modules` or propose the one-line source change —
   not silently copy `.next/standalone` that the build never produces
-- bind `0.0.0.0` (in a pod `HOSTNAME` is the pod name; standalone `server.js` binds to it)
+- not assume the standalone `HOSTNAME` pitfall applies: `next start` ignores
+  `HOSTNAME` and listens on all interfaces (`-H` sets it); only standalone `server.js`
+  binds to `$HOSTNAME`, which in a pod is the pod name
 - mount an `emptyDir` at `/app/.next/cache` so `readOnlyRootFilesystem` works
 - flag `NEXT_PUBLIC_API_BASE_URL` as **build-time only** (inlined into the client
   bundle by `next build`, app/api-base.js) → a Docker build arg per environment, not a
