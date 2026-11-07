@@ -37,8 +37,16 @@ Builds the app image, creates/reuses a `kind` cluster named `k8s-anything`, load
 image, swaps it into the overlay's manifests, installs Gateway API CRDs if the overlay
 uses them, creates clearly-labelled placeholder Secrets for any Secret the overlay
 references but doesn't define (prod creates those out-of-band), applies everything
-into a `smoke-<app>-<overlay>` namespace, and waits for Deployments/StatefulSets to
-roll out. Your previous kubectl context is restored. Requires Docker, kind, python3.
+into a `smoke-<app>-<overlay>` namespace, waits for Deployments/StatefulSets to roll
+out and for Jobs to complete. Your previous kubectl context is restored. Requires
+Docker, kind, python3.
+
+By default only the first Deployment's image is built, from `<app>/Dockerfile`.
+Apps with several images need `deploy/k8s/images.txt` (see `3-translate.md`). Every
+image listed there is built from the app root with its build args, loaded into kind
+and swapped in. Stock images that are already in the local Docker cache (such as a dev
+Postgres) are loaded into kind too, so the node doesn't pull them while the rollout
+is waiting. The rollout and Job timeout is `K8SA_SMOKE_TIMEOUT` (default 300s).
 
 ## Loop
 

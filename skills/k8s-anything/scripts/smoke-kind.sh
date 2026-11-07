@@ -3,14 +3,19 @@
 # Usage: smoke-kind.sh <app-path> [overlay=dev]
 # Builds <app-path>/Dockerfile, loads it into kind, applies the overlay with every
 # image whose name matches the app's image swapped for the local build, and waits
-# for rollouts. Only ever talks to the kind-k8s-anything context, and restores your
-# previous kubectl context afterwards.
+# for rollouts and Jobs. Only ever talks to the kind-k8s-anything context, and
+# restores your previous kubectl context afterwards.
+# Multi-image apps: list one image per line in <app>/deploy/k8s/images.txt as
+#   <image name as in base> [docker build args]   e.g.  myapp-worker --build-arg MAIN=./cmd/worker
+# Each is built from the app root (relative -f paths work) and swapped in. Without the
+# file, only the first Deployment's image is built from <app>/Dockerfile.
 set -euo pipefail
 
 APP="$(cd "${1:?usage: smoke-kind.sh <app-path> [overlay]}" && pwd)"
 OVERLAY="${2:-dev}"
 CLUSTER="k8s-anything"
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.7.0}"
+TIMEOUT="${K8SA_SMOKE_TIMEOUT:-300s}"   # per rollout / Job
 CTX="kind-$CLUSTER"
 KROOT="$APP/deploy/k8s"
 KDIR="$KROOT/overlays/$OVERLAY"
@@ -19,14 +24,37 @@ for t in docker kind kubectl; do command -v "$t" >/dev/null || { echo "missing: 
 [ -d "$KDIR" ] || { echo "no overlay at $KDIR" >&2; exit 2; }
 [ -f "$APP/Dockerfile" ] || { echo "no Dockerfile in $APP" >&2; exit 2; }
 
-# The app image is the first container image of the first Deployment in the overlay.
 RENDERED="$(kubectl kustomize "$KDIR")"
-APP_IMAGE="$(printf '%s\n' "$RENDERED" | awk '/^kind: Deployment/{d=1} d && /^ *image:/{print $2; exit}')"
-[ -n "$APP_IMAGE" ] || { echo "no Deployment image found in $KDIR" >&2; exit 2; }
-REPO="${APP_IMAGE%@*}"                      # drop digest
-case "${REPO##*/}" in *:*) REPO="${REPO%:*}";; esac   # drop tag (not a registry port)
-SHORT="${REPO##*/}"
-LOCAL="$SHORT:smoke"
+repo_of() { # image ref -> repository (drop digest, then tag but not a registry port)
+  local r="${1%@*}"
+  case "${r##*/}" in *:*) r="${r%:*}";; esac
+  printf '%s' "$r"
+}
+# BUILDS: one "<repo in rendered overlay>|<short name>|<docker build args>" per line.
+IMAGES_FILE="$KROOT/images.txt"
+RIMAGES="$(printf '%s\n' "$RENDERED" | awk '/^[ -]*image:/{gsub(/["\047]/, "", $NF); print $NF}' | sort -u)"
+BUILDS=""
+if [ -f "$IMAGES_FILE" ]; then
+  while read -r name args || [ -n "$name" ]; do
+    case "$name" in ''|'#'*) continue;; esac
+    repo=""
+    for img in $RIMAGES; do
+      r="$(repo_of "$img")"; [ "${r##*/}" = "$name" ] && { repo="$r"; break; }
+    done
+    [ -n "$repo" ] || { echo "images.txt: '$name' is not used by overlay $OVERLAY" >&2; exit 2; }
+    BUILDS="$BUILDS$repo|$name|$args
+"
+  done < "$IMAGES_FILE"
+  [ -n "$BUILDS" ] || { echo "images.txt lists no images" >&2; exit 2; }
+else
+  # The app image is the first container image of the first Deployment in the overlay.
+  APP_IMAGE="$(printf '%s\n' "$RENDERED" | awk '/^kind: Deployment/{d=1} d && /^[ -]*image:/{print $NF; exit}')"
+  [ -n "$APP_IMAGE" ] || { echo "no Deployment image found in $KDIR" >&2; exit 2; }
+  REPO="$(repo_of "$APP_IMAGE")"
+  BUILDS="$REPO|${REPO##*/}|
+"
+fi
+SHORT="$(printf '%s' "$BUILDS" | head -n 1 | cut -d'|' -f2)"
 NS="smoke-$(printf '%s-%s' "$SHORT" "$OVERLAY" | tr -c 'a-z0-9-' '-' | cut -c1-55 | sed 's/-*$//')"
 
 PREV_CTX="$(kubectl config current-context 2>/dev/null || true)"
@@ -42,9 +70,29 @@ if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
 fi
 K=(kubectl --context "$CTX")
 
-echo "== build $LOCAL (app image in manifests: $APP_IMAGE)"
-docker build -t "$LOCAL" "$APP"
-kind load docker-image "$LOCAL" --name "$CLUSTER"
+IMAGES_KUST=""
+while IFS='|' read -r repo short args; do
+  [ -n "$repo" ] || continue
+  echo "== build $short:smoke (image in manifests: $repo) ${args:+[$args]}"
+  # shellcheck disable=SC2086  # args are docker flags from images.txt, split on purpose
+  (cd "$APP" && docker build -t "$short:smoke" $args .)
+  kind load docker-image "$short:smoke" --name "$CLUSTER"
+  IMAGES_KUST="$IMAGES_KUST  - name: $repo
+    newName: $short
+    newTag: smoke
+"
+done <<EOF
+$BUILDS
+EOF
+# Other images (dev backing services) already in the local Docker cache: load them so
+# the node doesn't pull them inside the rollout timeout. Best effort.
+for img in $RIMAGES; do
+  case "$BUILDS" in *"$(repo_of "$img")|"*) continue;; esac
+  if docker image inspect "$img" >/dev/null 2>&1; then
+    kind load docker-image "$img" --name "$CLUSTER" >/dev/null 2>&1 \
+      && echo "== loaded local $img" || echo "== could not load $img; the node will pull it"
+  fi
+done
 
 # Wrapper kustomization must live under the app tree: kustomize rejects absolute
 # resource paths.
@@ -57,9 +105,7 @@ namespace: $NS
 resources:
   - ../overlays/$OVERLAY
 images:
-  - name: $REPO
-    newName: $SHORT
-    newTag: smoke
+$IMAGES_KUST
 EOF
 # kind ships no Gateway API CRDs; install the pinned standard channel if needed.
 if printf '%s\n' "$RENDERED" | grep -q '^apiVersion: gateway.networking.k8s.io/'; then
@@ -100,8 +146,12 @@ done
 echo "== wait for rollouts"
 for kind in deploy statefulset; do
   for r in $("${K[@]}" -n "$NS" get "$kind" -o name); do
-    "${K[@]}" -n "$NS" rollout status "$r" --timeout=180s
+    "${K[@]}" -n "$NS" rollout status "$r" --timeout="$TIMEOUT"
   done
+done
+# Jobs (migrations, one-offs) must complete; a finished Job may already be gone (TTL).
+for r in $("${K[@]}" -n "$NS" get job -o name); do
+  "${K[@]}" -n "$NS" wait --for=condition=complete "$r" --timeout="$TIMEOUT"
 done
 "${K[@]}" -n "$NS" get pods -o wide
 
